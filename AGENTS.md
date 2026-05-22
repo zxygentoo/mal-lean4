@@ -60,3 +60,29 @@ rejects the function, and distinguish the two cases when it does:
 The checker handles more than you might expect, including nested recursion
 through `List.map`/`List.mapM` over structural subterms. Don't preemptively
 mark `partial`.
+
+## Known leaks
+
+The `Atoms.store` (`IO.Ref (Array (IO.Ref MalVal))` in `Atoms.lean`) holds
+every atom for the lifetime of the process. Atoms allocated in transient
+scopes (e.g. `(let* (a (atom 0)) (do-something-without-returning-a))`)
+don't get freed even when their `MalVal.atom` handle is unreferenced.
+
+This is structural, not a bug: Lean's strict positivity rejects
+`Atom : IO.Ref MalVal → MalVal` directly (the OCaml shape), so we
+indirect through a `Nat` id into an external table. The table is the
+storage that keeps the cells alive past their use.
+
+Real fixes considered and rejected:
+- `unsafe inductive` for the atom case — contagious `unsafe` keyword across
+  every `MalVal`-touching def. Same tradeoff we declined for closures.
+- `opaque Cell : Type` with FFI-backed `IO.Ref MalVal` underneath — gets
+  proper RC, but requires C glue and shifts the project from "Lean only"
+  to "Lean + FFI."
+- Periodic compaction of the table — requires walking live values to
+  compute liveness, substantial work.
+
+The leak is bounded by atom-creation count within a single process. The
+test harness uses fresh processes per step, so tests don't observe it.
+An interactive session that defines a thousand atoms accumulates ~hundreds
+of KB; this is acceptable for the project's scope.

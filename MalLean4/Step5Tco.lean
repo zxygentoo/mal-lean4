@@ -33,10 +33,7 @@ mutual
       (args : List MalVal) : MalIO MalVal := do
     match head with
     | .fn (.builtin name) =>
-      match Core.builtin? name with
-      | some impl =>
-        impl { env := callerEnv, eval := eval, apply := apply callerEnv } args
-      | none      => throw s!"unknown builtin '{name}'"
+      Core.callBuiltin name callerEnv eval (apply callerEnv) args
     | .fn (.lambda params body captures) =>
       if params.length ≠ args.length then
         throw s!"arity mismatch: expected {params.length}, got {args.length}"

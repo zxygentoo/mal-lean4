@@ -10,6 +10,20 @@ open Types
 
 namespace Core
 
+/-- Runtime context passed to every builtin. Private to `Core` — step files
+never name it; they call `Core.callBuiltin` instead, which constructs the
+context internally. Holds the env at the call site plus the step's `eval`
+and `apply` callbacks (the latter is partially-applied with `env`). -/
+private structure Context where
+  env   : Env
+  eval  : Env → MalVal → MalIO MalVal
+  apply : MalVal → List MalVal → MalIO MalVal
+
+/-- A mal builtin. Most builtins ignore the context (`fun _ args => …`);
+env-aware ones reach into it for `ctx.eval`, `ctx.apply`, or
+`ctx.env.root`. -/
+private abbrev MalFn := Context → List MalVal → MalIO MalVal
+
 /-- Structural equality on `MalVal`. Lists compare element-wise; atoms by
 identity (Nat id), so two `(atom 0)` calls produce non-equal values. -/
 public partial def malEqual : MalVal → MalVal → Bool
@@ -150,14 +164,24 @@ private def table : List (String × MalFn) :=
     ("load-file",   «load-file»),
     ("swap!",       swap!) ]
 
-/-- Look up a builtin's implementation by name. -/
-public def builtin? (name : String) : Option MalFn :=
-  table.find? (·.1 == name) |>.map (·.2)
+/-- Dispatch a builtin by `name` with the step's `eval`/`apply` callbacks
+(`apply` should be partially applied with the caller's env). Errors if
+`name` is not a registered builtin. -/
+public def callBuiltin
+    (name : String)
+    (env : Env)
+    (eval : Env → MalVal → MalIO MalVal)
+    (apply : MalVal → List MalVal → MalIO MalVal)
+    (args : List MalVal)
+    : MalIO MalVal := do
+  match table.find? (·.1 == name) with
+  | some (_, impl) => impl { env, eval, apply } args
+  | none           => throw s!"unknown builtin '{name}'"
 
-/-- The starting environment for the mal REPL. Every builtin from `table`
-is bound by name to `.fn (.builtin name)`. Env-aware builtins
-(`eval`/`load-file`/`swap!`) live in the same table — they use the
-`Context` arg to reach the step's `eval`/`apply`. -/
+/-- The starting environment for the mal REPL. Every builtin from the
+internal table is bound by name to `.fn (.builtin name)`. Env-aware
+builtins (`eval`/`load-file`/`swap!`) live in the same table — they reach
+into the step's `eval`/`apply` via the private `Context`. -/
 public def initialEnv : IO Env := do
   let env ← Env.empty
   for (name, _) in table do

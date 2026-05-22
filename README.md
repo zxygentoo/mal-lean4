@@ -24,10 +24,11 @@ tests/run.sh step2_eval          # run tests for one step
 
 ```
 MalLean4/
-  Types.lean         MalVal + MalFn + MalM
-  Env.lean           evaluation environment (mutable via IO.Ref)
-  Closure.lean       user-defined function registry
-  Core.lean          builtins + initial env
+  Types.lean         MalVal + Fn (closure-converted lambdas)
+  Env.lean           evaluation environment (IO.Ref + HashMap, mutable)
+  Atoms.lean         atom registry (mal's explicit mutable cells)
+  FreeVars.lean      free-variable analysis for closure capture
+  Core.lean          builtins + initialEnv + Context (private)
   Reader.lean        tokenizer + parser (hand-written, no regex)
   Printer.lean       pretty-printer
   Step*.lean         one file per step's executable
@@ -36,6 +37,7 @@ tests/
   runtest.py         mal harness (verbatim from upstream)
   step*_*.mal        test cases (verbatim from upstream)
   run.sh             wrapper that builds and invokes runtest.py
+  test.txt, *.mal    fixtures for step 6 (slurp / load-file targets)
 ```
 
 ## Status

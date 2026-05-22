@@ -73,21 +73,3 @@ public partial def root (env : Env) : Env :=
   | some o => o.root
 
 end Env
-
-/-- Runtime context passed to every builtin.
-
-Holds the env at the call site plus references to the step's `eval` and
-`apply` (`apply` is already partially applied with `env`, so builtins call
-it as `ctx.apply head args`). This lets env-aware builtins like
-`eval`/`load-file`/`swap!` recurse into the interpreter without each step
-duplicating their special cases in `apply`.
--/
-public structure Context where
-  env   : Env
-  eval  : Env → MalVal → MalIO MalVal
-  apply : MalVal → List MalVal → MalIO MalVal
-
-/-- The shape of a mal builtin. Most builtins ignore the context
-(`fun _ args => …`); env-aware ones reach into it for `ctx.eval`,
-`ctx.apply`, or `ctx.env.root`. -/
-public abbrev MalFn := Context → List MalVal → MalIO MalVal

@@ -21,10 +21,7 @@ mutual
       (args : List MalVal) : MalIO MalVal := do
     match head with
     | .fn (.builtin name) =>
-      match Core.builtin? name with
-      | some impl =>
-        impl { env := callerEnv, eval := EVAL, apply := apply callerEnv } args
-      | none      => throw s!"unknown builtin '{name}'"
+      Core.callBuiltin name callerEnv EVAL (apply callerEnv) args
     | _ => throw "first item in list is not callable"
 end
 
