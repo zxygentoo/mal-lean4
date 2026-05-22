@@ -19,12 +19,8 @@ private def escapeStr (s : String) : String :=
         | c    => String.singleton c))
     ""
 
-/-- Format a `MalVal` to its mal surface syntax.
-
-In `IO` so the `.atom` case can dereference the cell — atoms render as
-`(atom <contents>)`, where the contents are the *current* value, not a
-snapshot. Everything else is pure but lifted into `IO` for uniformity.
--/
+/-- Format a `MalVal` to its mal surface syntax. In `IO` so `.atom` can
+deref its cell — atoms render as `(atom <current-contents>)`. -/
 public partial def prStr : MalVal → IO String
   | .nil         => return "nil"
   | .bool true   => return "true"

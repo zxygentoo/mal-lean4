@@ -10,10 +10,9 @@ open Types
 
 namespace Core
 
-/-- Runtime context passed to every builtin. Private to `Core` — step files
-never name it; they call `Core.callBuiltin` instead, which constructs the
-context internally. Holds the env at the call site plus the step's `eval`
-and `apply` callbacks (the latter is partially-applied with `env`). -/
+/-- Runtime context passed to every builtin. Holds the env at the call
+site plus the step's `eval`/`apply` callbacks (`apply` is partially applied
+with `env`). Constructed inside `callBuiltin`. -/
 private structure Context where
   env   : Env
   eval  : Env → MalVal → MalIO MalVal
@@ -178,10 +177,8 @@ public def callBuiltin
   | some (_, impl) => impl { env, eval, apply } args
   | none           => throw s!"unknown builtin '{name}'"
 
-/-- The starting environment for the mal REPL. Every builtin from the
-internal table is bound by name to `.fn (.builtin name)`. Env-aware
-builtins (`eval`/`load-file`/`swap!`) live in the same table — they reach
-into the step's `eval`/`apply` via the private `Context`. -/
+/-- The starting environment for the mal REPL, with every builtin bound by
+name. -/
 public def initialEnv : IO Env := do
   let env ← Env.empty
   for (name, _) in table do

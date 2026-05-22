@@ -13,15 +13,18 @@ mutual
     | .list (.sym "do"   :: rest) => evalDo  env rest
     | .list (.sym "if"   :: rest) => evalIf  env rest
     | .list (.sym "fn*"  :: rest) => evalFn  env rest
-    | .list (head :: args)        => do
+    | .list (head :: args)        => evalCall head args
+    | .sym s                      => lookupSym s
+    | other                       => return other
+  where
+    evalCall (head : MalVal) (args : List MalVal) : MalIO MalVal := do
       let head' ← eval env head
       let args' ← args.mapM (eval env)
       apply env head' args'
-    | .sym s => do
+    lookupSym (s : String) : MalIO MalVal := do
       match ← env.find? s with
       | some v => return v
       | none   => throw s!"'{s}' not found"
-    | other => return other
 
   partial def apply (callerEnv : Env) (head : MalVal)
       (args : List MalVal) : MalIO MalVal := do

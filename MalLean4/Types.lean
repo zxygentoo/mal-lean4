@@ -7,13 +7,9 @@ public abbrev MalIO := ExceptT String IO
 
 mutual
 
-/-- The mal abstract syntax tree.
-
-Every value the interpreter manipulates — read from input, produced by
-`eval`, formatted by the printer — is one of these constructors. Functions
-share a single `fn` constructor that wraps `Fn`; the value type carries no
-indirection through a registry.
--/
+/-- The mal abstract syntax tree. Every value the interpreter manipulates
+— read from input, produced by `eval`, formatted by the printer — is one
+of these constructors. -/
 public inductive MalVal where
   | nil
   | bool : Bool → MalVal
@@ -24,15 +20,10 @@ public inductive MalVal where
   | fn   : Fn → MalVal
   | atom : Nat → MalVal
 
-/-- A callable: either a Lean-implemented `builtin` (looked up by name in
-`Core.builtinTable`) or a user-defined `lambda` from `fn*`.
-
-`lambda` is closure-converted: it stores its parameter names, its body AST,
-and a snapshot of free variables captured at `fn*` time. There is **no**
-captured `Env` — top-level lookups defer to the caller's env at apply time,
-which gives mal's "closures see later `def!`s" semantics while keeping the
-value type free of cycles.
--/
+/-- A callable: either a `builtin` (resolved by name via `Core.callBuiltin`)
+or a `lambda` from `fn*`. `lambda` is closure-converted — it stores params,
+body, and a snapshot of free variables captured at `fn*` time. No `Env` is
+stored; unresolved names defer to the caller's env at apply time. -/
 public inductive Fn where
   | builtin : String → Fn
   | lambda  (params : List String) (body : MalVal) (captures : List (String × MalVal)) : Fn

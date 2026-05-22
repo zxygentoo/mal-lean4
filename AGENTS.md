@@ -69,9 +69,9 @@ scopes (e.g. `(let* (a (atom 0)) (do-something-without-returning-a))`)
 don't get freed even when their `MalVal.atom` handle is unreferenced.
 
 This is structural, not a bug: Lean's strict positivity rejects
-`Atom : IO.Ref MalVal → MalVal` directly (the OCaml shape), so we
-indirect through a `Nat` id into an external table. The table is the
-storage that keeps the cells alive past their use.
+`Atom : IO.Ref MalVal → MalVal` directly, so we indirect through a `Nat`
+id into an external table. The table is the storage that keeps the cells
+alive past their use.
 
 Real fixes considered and rejected:
 - `unsafe inductive` for the atom case — contagious `unsafe` keyword across

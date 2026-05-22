@@ -7,15 +7,18 @@ open Types
 mutual
   partial def EVAL (env : Env) : MalVal → MalIO MalVal
     | .list []             => return .list []
-    | .list (head :: args) => do
+    | .list (head :: args) => evalCall head args
+    | .sym s               => lookupSym s
+    | other                => return other
+  where
+    evalCall (head : MalVal) (args : List MalVal) : MalIO MalVal := do
       let head' ← EVAL env head
       let args' ← args.mapM (EVAL env)
       apply env head' args'
-    | .sym s => do
+    lookupSym (s : String) : MalIO MalVal := do
       match ← env.find? s with
       | some v => return v
       | none   => throw s!"'{s}' not found"
-    | other => return other
 
   partial def apply (callerEnv : Env) (head : MalVal)
       (args : List MalVal) : MalIO MalVal := do

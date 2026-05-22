@@ -4,19 +4,9 @@ public import MalLean4.Types
 
 open Types
 
-/-- Backing storage for mal atoms.
-
-Each `MalVal.atom n` indexes into this array. The slot holds an `IO.Ref` so
-the atom's contents can change after creation — that's what makes atoms
-*atoms* in mal/Clojure (explicit, user-visible mutable cells, in contrast
-to mal's otherwise mostly-immutable values).
-
-The mutation here is fundamentally different from the closure registry we
-removed: closures *can* be pure data (we proved this with closure
-conversion), so the registry was a workaround for kernel positivity. Atoms
-*cannot* be pure data — mutation is part of their semantics. So one
-`IO.Ref` registry is the right shape for them.
--/
+/-- Backing storage for mal atoms. `MalVal.atom n` indexes into this array;
+each slot is an `IO.Ref` so the atom's contents are user-mutable via
+`reset!` / `swap!`. -/
 private initialize store : IO.Ref (Array (IO.Ref MalVal)) ← IO.mkRef #[]
 
 namespace Atoms
