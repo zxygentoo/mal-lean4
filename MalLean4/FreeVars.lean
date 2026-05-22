@@ -7,7 +7,7 @@ open Types
 -- bound in the enclosing scope, returns the symbols referenced in the AST
 -- that aren't bound by an enclosing binder or by any inner binding form.
 -- Used at `fn*` time to decide which free variables to snapshot into the
--- closure's captures list.
+-- closure.
 --
 -- Honors mal's binding forms (`let*` is sequential — each RHS sees only
 -- previous binders; `fn*` adds its params; `def!` doesn't bind its name in

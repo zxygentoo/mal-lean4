@@ -41,8 +41,8 @@ public partial def find? (env : Env) (k : String) : IO (Option MalVal) := do
     | none   => return none
 
 /-- Look up `k` walking only *local* frames (stops before the root). Used
-at `fn*` time to pick which free variables to snapshot into captures vs.
-defer to call-time lookup. -/
+at `fn*` time to pick which free variables to snapshot into the closure
+vs. defer to call-time lookup. -/
 public partial def findLocal? (env : Env) (k : String) : IO (Option MalVal) := do
   match env.outer with
   | none   => return none

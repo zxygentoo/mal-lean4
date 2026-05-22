@@ -23,23 +23,6 @@ env-aware ones reach into it for `ctx.eval`, `ctx.apply`, or
 `ctx.env.root`. -/
 private abbrev MalFn := Context → List MalVal → MalIO MalVal
 
-/-- Structural equality on `MalVal`. Lists compare element-wise; atoms by
-identity (Nat id), so two `(atom 0)` calls produce non-equal values. -/
-private partial def malEqual : MalVal → MalVal → Bool
-  | .nil,         .nil         => true
-  | .bool a,      .bool b      => a == b
-  | .int a,       .int b       => a == b
-  | .sym a,       .sym b       => a == b
-  | .str a,       .str b       => a == b
-  | .atom a,      .atom b      => a == b
-  | .list xs,     .list ys     => listEqual xs ys
-  | _,            _            => false
-where
-  listEqual : List MalVal → List MalVal → Bool
-    | [],      []      => true
-    | x :: xs, y :: ys => malEqual x y && listEqual xs ys
-    | _,       _       => false
-
 private def intBinop (op : Int → Int → Int) : MalFn := fun _ => fun
   | [.int a, .int b] => return .int (op a b)
   | _                => throw "expected two integers"
@@ -49,7 +32,7 @@ private def compOp (op : Int → Int → Bool) : MalFn := fun _ => fun
   | _                => throw "expected two integers"
 
 private def eq : MalFn := fun _ => fun
-  | [a, b] => return .bool (malEqual a b)
+  | [a, b] => return .bool (a.equal b)
   | _      => throw "=: expected two arguments"
 
 private def list : MalFn := fun _ args => return .list args

@@ -21,12 +21,22 @@ public inductive MalVal where
   | atom : Nat → MalVal
 
 /-- A callable: either a `builtin` (resolved by name via `Core.callBuiltin`)
-or a `lambda` from `fn*`. `lambda` is closure-converted — it stores params,
-body, and a snapshot of free variables captured at `fn*` time. No `Env` is
-stored; unresolved names defer to the caller's env at apply time. -/
+or a `lambda` from `fn*` (see `Lambda`). -/
 public inductive Fn where
   | builtin : String → Fn
-  | lambda  (params : List String) (body : MalVal) (captures : List (String × MalVal)) : Fn
+  | lambda  : Lambda → Fn
+
+/-- A closure-converted user function. Holds params, body, and a snapshot
+of free variables captured at `fn*` time. No `Env` is stored; unresolved
+names defer to the caller's env at apply time. -/
+public structure Lambda where
+  public mk ::
+  /-- Parameter names, in positional order. -/
+  public params   : List String
+  /-- Unevaluated body form; `apply` evaluates this against the call-time env. -/
+  public body     : MalVal
+  /-- Free-variable snapshot taken at `fn*` time: `(name, value)` pairs. -/
+  public snapshot : List (String × MalVal)
 
 end
 
@@ -36,5 +46,22 @@ public def MalVal.isTruthy : MalVal → Bool
   | .nil        => false
   | .bool false => false
   | _           => true
+
+/-- Structural equality on `MalVal`. Lists compare element-wise; atoms by
+identity (Nat id), so two `(atom 0)` calls produce non-equal values. -/
+public partial def MalVal.equal : MalVal → MalVal → Bool
+  | .nil,         .nil         => true
+  | .bool a,      .bool b      => a == b
+  | .int a,       .int b       => a == b
+  | .sym a,       .sym b       => a == b
+  | .str a,       .str b       => a == b
+  | .atom a,      .atom b      => a == b
+  | .list xs,     .list ys     => listEqual xs ys
+  | _,            _            => false
+where
+  listEqual : List MalVal → List MalVal → Bool
+    | [],      []      => true
+    | x :: xs, y :: ys => MalVal.equal x y && listEqual xs ys
+    | _,       _       => false
 
 end Types

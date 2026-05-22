@@ -31,15 +31,15 @@ mutual
     match head with
     | .fn (.builtin name) =>
       Core.callBuiltin name callerEnv eval (apply callerEnv) args
-    | .fn (.lambda params body captures) =>
-      if params.length ≠ args.length then
-        throw s!"arity mismatch: expected {params.length}, got {args.length}"
+    | .fn (.lambda l) =>
+      if l.params.length ≠ args.length then
+        throw s!"arity mismatch: expected {l.params.length}, got {args.length}"
       let closureEnv ← callerEnv.new
-      for (k, v) in captures do
+      for (k, v) in l.snapshot do
         closureEnv.set k v
-      for (p, a) in params.zip args do
+      for (p, a) in l.params.zip args do
         closureEnv.set p a
-      eval closureEnv body
+      eval closureEnv l.body
     | _ => throw "first item in list is not callable"
 
   partial def evalDef (env : Env) : List MalVal → MalIO MalVal
@@ -86,8 +86,8 @@ mutual
       let frees := FreeVars.unique paramNames body
       let pairs ← frees.mapM fun name => do
         return (← env.findLocal? name).map (Prod.mk name)
-      let captures := pairs.filterMap id
-      return .fn (.lambda paramNames body captures)
+      let snapshot := pairs.filterMap id
+      return .fn (.lambda ⟨paramNames, body, snapshot⟩)
     | _ => throw "fn*: expected (fn* (params) body)"
 end
 
