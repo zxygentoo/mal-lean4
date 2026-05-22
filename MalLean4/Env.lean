@@ -35,7 +35,7 @@ public partial def find? (env : Env) (k : String) : IO (Option MalVal) := do
   let data ← env.current.get
   match data[k]? with
   | some v => return some v
-  | none =>
+  | none   =>
     match env.outer with
     | some o => o.find? k
     | none   => return none

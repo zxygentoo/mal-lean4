@@ -5,17 +5,38 @@ import MalLean4.Printer
 
 open Types
 
+-- Quasiquote transformation: rewrites a `quasiquote`d form into a tree of
+-- `cons`/`concat` calls that, when evaluated, reconstruct the form with
+-- `unquote`/`splice-unquote` substitutions applied.
+mutual
+  def quasiquote : MalVal → MalVal
+    | .list [.sym "unquote", x] => x
+    | .list xs                  => quasiquoteList xs
+    | .sym s                    => .list [.sym "quote", .sym s]
+    | other                     => other
+
+  def quasiquoteList : List MalVal → MalVal
+    | []      => .list []
+    | x :: xs =>
+      let rest := quasiquoteList xs
+      match x with
+      | .list [.sym "splice-unquote", y] => .list [.sym "concat", y, rest]
+      | _ => .list [.sym "cons", quasiquote x, rest]
+end
+
 mutual
   partial def eval (env : Env) : MalVal → MalIO MalVal
-    | .list []                    => return .list []
-    | .list (.sym "def!" :: rest) => evalDef env rest
-    | .list (.sym "let*" :: rest) => evalLet env rest
-    | .list (.sym "do"   :: rest) => evalDo  env rest
-    | .list (.sym "if"   :: rest) => evalIf  env rest
-    | .list (.sym "fn*"  :: rest) => evalFn  env rest
-    | .list (head :: args)        => evalCall head args
-    | .sym s                      => lookupSym s
-    | other                       => return other
+    | .list []                          => return .list []
+    | .list (.sym "def!"       :: rest) => evalDef env rest
+    | .list (.sym "let*"       :: rest) => evalLet env rest
+    | .list (.sym "do"         :: rest) => evalDo  env rest
+    | .list (.sym "if"         :: rest) => evalIf  env rest
+    | .list (.sym "fn*"        :: rest) => evalFn  env rest
+    | .list (.sym "quote"      :: rest) => evalQuote rest
+    | .list (.sym "quasiquote" :: rest) => evalQuasiquote env rest
+    | .list (head :: args)              => evalCall head args
+    | .sym s                            => lookupSym s
+    | other                             => return other
   where
     evalCall (head : MalVal) (args : List MalVal) : MalIO MalVal := do
       let head' ← eval env head
@@ -89,6 +110,14 @@ mutual
       let snapshot := pairs.filterMap id
       return .fn (.lambda ⟨paramNames, body, snapshot⟩)
     | _ => throw "fn*: expected (fn* (params) body)"
+
+  partial def evalQuote : List MalVal → MalIO MalVal
+    | [arg] => return arg
+    | _ => throw "quote: expected 1 argument"
+
+  partial def evalQuasiquote (env : Env) : List MalVal → MalIO MalVal
+    | [arg] => eval env (quasiquote arg)
+    | _ => throw "quasiquote: expected 1 argument"
 end
 
 def READ  (s : String)   : Except String (Option MalVal) := Reader.readStr s
@@ -116,7 +145,7 @@ def main (args : List String) : IO Unit := do
   let env ← Core.initialEnv
   let _ ← rep env "(def! not (fn* (a) (if a false true)))"
   match args with
-  | [] =>
+  | []           =>
     env.set "*ARGV*" (.list [])
     let stdin  ← IO.getStdin
     let stdout ← IO.getStdout

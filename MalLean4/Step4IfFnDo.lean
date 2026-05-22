@@ -31,7 +31,7 @@ mutual
     match head with
     | .fn (.builtin name) =>
       Core.callBuiltin name callerEnv eval (apply callerEnv) args
-    | .fn (.lambda l) =>
+    | .fn (.lambda l)     =>
       if l.params.length ≠ args.length then
         throw s!"arity mismatch: expected {l.params.length}, got {args.length}"
       let closureEnv ← callerEnv.new
@@ -72,7 +72,7 @@ mutual
       evalDo env xs
 
   partial def evalIf (env : Env) : List MalVal → MalIO MalVal
-    | [pred, thn] => do
+    | [pred, thn]      => do
       if (← eval env pred).isTruthy then eval env thn else return .nil
     | [pred, thn, els] => do
       if (← eval env pred).isTruthy then eval env thn else eval env els
@@ -82,7 +82,7 @@ mutual
     | [.list params, body] => do
       let paramNames ← params.mapM fun
         | .sym s => return s
-        | _      => throw "fn*: parameter is not a symbol"
+        | _ => throw "fn*: parameter is not a symbol"
       let frees := FreeVars.unique paramNames body
       let pairs ← frees.mapM fun name => do
         return (← env.findLocal? name).map (Prod.mk name)

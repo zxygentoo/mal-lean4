@@ -61,6 +61,33 @@ The checker handles more than you might expect, including nested recursion
 through `List.map`/`List.mapM` over structural subterms. Don't preemptively
 mark `partial`.
 
+## Match arms
+
+Align `=>` within a single match by padding patterns with spaces so all
+arrows sit at the same column.
+
+**Exception:** the catch-all `| _ => …` always stays as `| _ => …` — a
+wildcard is visually distinct enough that padding it out to match its
+longer siblings adds noise without aiding the scan:
+
+```
+| .sym k :: rhs :: rest => do
+  let v ← eval env rhs
+  env.set k v
+| _ => throw "let*: bindings must be sym/expr pairs"
+```
+
+Bodies that fit inline go after `=>`. Multi-line bodies either continue
+on the `=>` line with a body-starting keyword (`do`, `let`, `if`) and
+indent 2 spaces under the case's `|` column, or break to a new line at
+the same +2 indent. Prefer the same-line form when there's just one
+keyword; break to a new line for nested `match` so the inner `|` cases
+don't visually clash with the outer ones.
+
+Skip the alignment entirely for a match where one pattern is so much
+longer than its peers that padding would create comically wide gaps —
+readability beats mechanical consistency.
+
 ## Known leaks
 
 The `Atoms.store` (`IO.Ref (Array (IO.Ref MalVal))` in `Atoms.lean`) holds

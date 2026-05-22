@@ -7,7 +7,7 @@ open Types
 /-- Backing storage for mal atoms. `MalVal.atom n` indexes into this array;
 each slot is an `IO.Ref` so the atom's contents are user-mutable via
 `reset!` / `swap!`. -/
-private initialize store : IO.Ref (Array (IO.Ref MalVal)) ← IO.mkRef #[]
+initialize store : IO.Ref (Array (IO.Ref MalVal)) ← IO.mkRef #[]
 
 namespace Atoms
 

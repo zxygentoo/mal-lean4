@@ -45,7 +45,7 @@ end
 public def MalVal.isTruthy : MalVal → Bool
   | .nil        => false
   | .bool false => false
-  | _           => true
+  | _ => true
 
 /-- Structural equality on `MalVal`. Lists compare element-wise; atoms by
 identity (Nat id), so two `(atom 0)` calls produce non-equal values. -/

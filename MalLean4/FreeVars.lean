@@ -20,7 +20,7 @@ mutual
 partial def freeVars (binders : List String) : MalVal → List String
   | .sym s    => if binders.contains s then [] else [s]
   | .list xs  => freeVarsList binders xs
-  | _         => []
+  | _ => []
 
 partial def freeVarsList (binders : List String) : List MalVal → List String
   | [.sym "let*", .list bindings, body] => letFrees binders bindings body

@@ -13,7 +13,7 @@ namespace Core
 /-- Runtime context passed to every builtin. Holds the env at the call
 site plus the step's `eval`/`apply` callbacks (`apply` is partially applied
 with `env`). Constructed inside `callBuiltin`. -/
-private structure Context where
+structure Context where
   env   : Env
   eval  : Env → MalVal → MalIO MalVal
   apply : MalVal → List MalVal → MalIO MalVal
@@ -21,43 +21,66 @@ private structure Context where
 /-- A mal builtin. Most builtins ignore the context (`fun _ args => …`);
 env-aware ones reach into it for `ctx.eval`, `ctx.apply`, or
 `ctx.env.root`. -/
-private abbrev MalFn := Context → List MalVal → MalIO MalVal
+abbrev MalFn := Context → List MalVal → MalIO MalVal
 
-private def intBinop (op : Int → Int → Int) : MalFn := fun _ => fun
+def intBinop (op : Int → Int → Int) : MalFn := fun _ => fun
   | [.int a, .int b] => return .int (op a b)
-  | _                => throw "expected two integers"
+  | _ => throw "expected two integers"
 
-private def compOp (op : Int → Int → Bool) : MalFn := fun _ => fun
+def compOp (op : Int → Int → Bool) : MalFn := fun _ => fun
   | [.int a, .int b] => return .bool (op a b)
-  | _                => throw "expected two integers"
+  | _ => throw "expected two integers"
 
-private def eq : MalFn := fun _ => fun
+def eq : MalFn := fun _ => fun
   | [a, b] => return .bool (a.equal b)
-  | _      => throw "=: expected two arguments"
+  | _ => throw "=: expected two arguments"
 
-private def list : MalFn := fun _ args => return .list args
+def list : MalFn := fun _ args => return .list args
 
-private def list? : MalFn := fun _ => fun
+def list? : MalFn := fun _ => fun
   | [.list _] => return .bool true
   | [_]       => return .bool false
-  | _         => throw "list?: expected one argument"
+  | _ => throw "list?: expected one argument"
 
-private def empty? : MalFn := fun _ => fun
+def empty? : MalFn := fun _ => fun
   | [.list xs] => return .bool xs.isEmpty
   | [_]        => return .bool false
-  | _          => throw "empty?: expected one argument"
+  | _ => throw "empty?: expected one argument"
 
-private def count : MalFn := fun _ => fun
+def count : MalFn := fun _ => fun
   | [.list xs] => return .int xs.length
   | [_]        => return .int 0
-  | _          => throw "count: expected one argument"
+  | _ => throw "count: expected one argument"
 
-private def prn : MalFn := fun _ args => do
+def cons : MalFn := fun _ => fun
+  | [x, .list xs] => return .list (x :: xs)
+  | _ => throw "cons: expected (cons value list)"
+
+def concat : MalFn := fun _ args => do
+  let lists ← args.mapM fun
+    | .list xs => return xs
+    | _ => throw "concat: expected list arguments"
+  return .list lists.flatten
+
+def prn : MalFn := fun _ args => do
   let strs ← args.mapM fun v => (Printer.prStr v : IO String)
   IO.println (" ".intercalate strs)
   return .nil
 
-private def readString : MalFn := fun _ => fun
+def println : MalFn := fun _ args => do
+  let strs ← args.mapM fun v => (Printer.prStrUnreadably v : IO String)
+  IO.println (" ".intercalate strs)
+  return .nil
+
+def prStrFn : MalFn := fun _ args => do
+  let strs ← args.mapM fun v => (Printer.prStr v : IO String)
+  return .str (" ".intercalate strs)
+
+def str : MalFn := fun _ args => do
+  let strs ← args.mapM fun v => (Printer.prStrUnreadably v : IO String)
+  return .str ("".intercalate strs)
+
+def readString : MalFn := fun _ => fun
   | [.str s] =>
     match Reader.readStr s with
     | .ok (some ast) => return ast
@@ -65,63 +88,63 @@ private def readString : MalFn := fun _ => fun
     | .error e       => throw e
   | _ => throw "read-string: expected one string argument"
 
-private def slurp : MalFn := fun _ => fun
+def slurp : MalFn := fun _ => fun
   | [.str path] => do
     let content ← IO.FS.readFile path
     return .str content
   | _ => throw "slurp: expected one string argument"
 
-private def atom : MalFn := fun _ => fun
+def atom : MalFn := fun _ => fun
   | [v] => do
     let id ← Atoms.new v
     return .atom id
   | _ => throw "atom: expected one argument"
 
-private def atom? : MalFn := fun _ => fun
+def atom? : MalFn := fun _ => fun
   | [.atom _] => return .bool true
   | [_]       => return .bool false
-  | _         => throw "atom?: expected one argument"
+  | _ => throw "atom?: expected one argument"
 
-private def deref : MalFn := fun _ => fun
+def deref : MalFn := fun _ => fun
   | [.atom n] => do
     match ← Atoms.deref n with
     | some v => return v
     | none   => throw s!"deref: invalid atom #{n}"
   | _ => throw "deref: expected one atom argument"
 
-private def reset! : MalFn := fun _ => fun
+def reset! : MalFn := fun _ => fun
   | [.atom n, v] => do
     match ← Atoms.reset n v with
     | some r => return r
     | none   => throw s!"reset!: invalid atom #{n}"
   | _ => throw "reset!: expected (reset! atom value)"
 
-private def eval : MalFn := fun ctx => fun
+def eval : MalFn := fun ctx => fun
   | [ast] => ctx.eval ctx.env.root ast
-  | _     => throw "eval: expected one argument"
+  | _ => throw "eval: expected one argument"
 
-private def loadFile : MalFn := fun ctx => fun
+def loadFile : MalFn := fun ctx => fun
   | [.str path] => do
     let content ← IO.FS.readFile path
     match Reader.readStr s!"(do {content}\nnil)" with
     | .ok (some ast) => do
       let _ ← ctx.eval ctx.env.root ast
       return .nil
-    | .ok none  => return .nil
-    | .error e  => throw e
+    | .ok none       => return .nil
+    | .error e       => throw e
   | _ => throw "load-file: expected one string argument"
 
-private def swap! : MalFn := fun ctx => fun
+def swap! : MalFn := fun ctx => fun
   | .atom n :: fnArg :: rest => do
     match ← Atoms.deref n with
     | some current => do
       let newV ← ctx.apply fnArg (current :: rest)
       let _ ← Atoms.reset n newV
       return newV
-    | none => throw s!"swap!: invalid atom #{n}"
+    | none         => throw s!"swap!: invalid atom #{n}"
   | _ => throw "swap!: expected (swap! atom fn args...)"
 
-private def table : List (String × MalFn) :=
+def table : List (String × MalFn) :=
   [ ("+",  intBinop (· + ·)),
     ("-",  intBinop (· - ·)),
     ("*",  intBinop (· * ·)),
@@ -135,7 +158,12 @@ private def table : List (String × MalFn) :=
     ("list?",       list?),
     ("empty?",      empty?),
     ("count",       count),
+    ("cons",        cons),
+    ("concat",      concat),
     ("prn",         prn),
+    ("println",     println),
+    ("pr-str",      prStrFn),
+    ("str",         str),
     ("read-string", readString),
     ("slurp",       slurp),
     ("atom",        atom),
