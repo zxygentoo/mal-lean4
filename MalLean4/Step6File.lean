@@ -1,5 +1,6 @@
 import MalLean4.Core
 import MalLean4.FreeVars
+import MalLean4.Atoms
 import MalLean4.Reader
 import MalLean4.Printer
 
@@ -22,8 +23,7 @@ mutual
     | .list (head :: args)        => do
       let (head', env1) ← eval env head
       let (args', env2) ← evalArgs env1 args
-      let v ← apply env2 head' args'
-      return (v, env2)
+      apply env2 head' args'
     | .sym s => do
       match env.find? s with
       | some v => return (v, env)
@@ -38,21 +38,55 @@ mutual
       let (vs, env2) ← evalArgs env1 xs
       return (v :: vs, env2)
 
+  /-- Apply a callable to evaluated args. Returns `(value, env)` so the
+  env-aware builtins (`eval`, `load-file`, `swap!`) can propagate `def!`
+  updates back up the chain. -/
   partial def apply (callerEnv : Env) (head : MalVal)
-      (args : List MalVal) : MalIO MalVal := do
+      (args : List MalVal) : MalIO (MalVal × Env) := do
     match head with
+    | .fn (.builtin "eval") =>
+      match args with
+      | [ast] =>
+        let topEnv := callerEnv.top
+        let (v, topEnv') ← eval topEnv ast
+        return (v, callerEnv.replaceTop topEnv')
+      | _ => throw "eval: expected one argument"
+    | .fn (.builtin "load-file") =>
+      match args with
+      | [.str path] =>
+        let content ← IO.FS.readFile path
+        match Reader.readStr s!"(do {content}\nnil)" with
+        | .ok (some ast) =>
+          let topEnv := callerEnv.top
+          let (_, topEnv') ← eval topEnv ast
+          return (.nil, callerEnv.replaceTop topEnv')
+        | .ok none  => return (.nil, callerEnv)
+        | .error e  => throw e
+      | _ => throw "load-file: expected one string argument"
+    | .fn (.builtin "swap!") =>
+      match args with
+      | .atom n :: fnArg :: rest =>
+        match ← Atoms.deref n with
+        | some current =>
+          let (newV, env') ← apply callerEnv fnArg (current :: rest)
+          let _ ← Atoms.reset n newV
+          return (newV, env')
+        | none => throw s!"swap!: invalid atom #{n}"
+      | _ => throw "swap!: expected (swap! atom fn args...)"
     | .fn (.builtin name) =>
       match Core.builtin? name with
-      | some impl => impl args
-      | none      => throw s!"unknown builtin '{name}'"
+      | some impl =>
+        let v ← impl args
+        return (v, callerEnv)
+      | none => throw s!"unknown builtin '{name}'"
     | .fn (.lambda params body captures) =>
       if params.length ≠ args.length then
         throw s!"arity mismatch: expected {params.length}, got {args.length}"
       let paramBinds := params.zip args
       let closureEnv : Env :=
         { current := captures ++ paramBinds, outer := some callerEnv }
-      let (v, _) ← eval closureEnv body
-      return v
+      let (v, closureEnv') ← eval closureEnv body
+      return (v, closureEnv'.outer.getD callerEnv)
     | _ => throw "first item in list is not callable"
 
   partial def evalDef (env : Env) :
@@ -66,8 +100,8 @@ mutual
       List MalVal → MalIO (MalVal × Env)
     | [.list bindings, body] => do
       let letEnv ← bindLet env.child bindings
-      let (v, _) ← eval letEnv body
-      return (v, env)
+      let (v, letEnv') ← eval letEnv body
+      return (v, letEnv'.outer.getD env)
     | _ => throw "let*: expected (let* (bindings) body)"
 
   partial def bindLet (env : Env) : List MalVal → MalIO Env
@@ -130,9 +164,17 @@ partial def loop (env : Env) (stdin stdout : IO.FS.Stream) : IO Unit := do
     stdout.putStrLn out
   loop env' stdin stdout
 
-def main : IO Unit := do
+def main (args : List String) : IO Unit := do
   let env := Core.initialEnv
-  let (_, env')  ← rep env "(def! not (fn* (a) (if a false true)))"
-  let stdin  ← IO.getStdin
-  let stdout ← IO.getStdout
-  loop env' stdin stdout
+  let (_, env₁) ← rep env "(def! not (fn* (a) (if a false true)))"
+  match args with
+  | [] =>
+    let env₂ := env₁.set "*ARGV*" (.list [])
+    let stdin  ← IO.getStdin
+    let stdout ← IO.getStdout
+    loop env₂ stdin stdout
+  | file :: rest =>
+    let argv : List MalVal := rest.map MalVal.str
+    let env₂ := env₁.set "*ARGV*" (.list argv)
+    let _ ← rep env₂ s!"(load-file \"{file}\")"
+    return

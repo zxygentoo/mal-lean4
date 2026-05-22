@@ -109,14 +109,14 @@ mutual
 end
 
 def READ  (s : String)   : Except String (Option MalVal) := Reader.readStr s
-def PRINT (ast : MalVal) : String                        := Printer.prStr ast
+def PRINT (ast : MalVal) : IO String                     := Printer.prStr ast
 
 def rep (env : Env) (s : String) : IO (Option String × Env) := do
   match READ s with
   | .ok none       => return (none, env)
   | .ok (some ast) =>
     match ← (eval env ast).run with
-    | .ok (v, env') => return (some (PRINT v), env')
+    | .ok (v, env') => return (some (← PRINT v), env')
     | .error e      => return (some s!"Error: {e}", env)
   | .error e       => return (some s!"Error: {e}", env)
 

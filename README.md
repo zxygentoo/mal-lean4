@@ -47,6 +47,8 @@ tests/
 | 2 — eval          | `step2_eval`        | 9 / 9          |
 | 3 — environments  | `step3_env`         | 27 / 27        |
 | 4 — if/fn/do      | `step4_if_fn_do`    | 107 / 107      |
+| 5 — TCO           | `step5_tco`         | 8 / 8          |
+| 6 — file/eval     | `step6_file`        | 38 / 38        |
 
 Counts cover the spec-required cases only. Deferrable and optional cases
 (strings, nil/true/false, reader macros, vectors, hash-maps, quoting)

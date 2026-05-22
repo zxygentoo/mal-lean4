@@ -22,6 +22,7 @@ declare -A STEP_OPTS=(
   [step3_env]="--no-deferrable --no-optional"
   [step4_if_fn_do]="--no-deferrable --no-optional"
   [step5_tco]="--no-deferrable --no-optional"
+  [step6_file]="--no-deferrable --no-optional"
 )
 
 normalize() {

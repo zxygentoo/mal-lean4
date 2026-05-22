@@ -50,4 +50,20 @@ public partial def findLocal? (env : Env) (k : String) : Option MalVal :=
     | some (_, v) => some v
     | none        => findLocal? o k
 
+/-- The outermost frame (the one with `outer = none`). For `(eval …)` and
+`(load-file …)` — they evaluate in the top env regardless of where they're
+called from. -/
+public partial def top (env : Env) : Env :=
+  match env.outer with
+  | none   => env
+  | some o => o.top
+
+/-- Rebuild `env`'s chain with `newTop` substituted for the outermost frame.
+Used to propagate `def!` updates that happen *inside* `(eval …)` back up
+through nested scopes, so subsequent expressions see them. -/
+public partial def replaceTop (env : Env) (newTop : Env) : Env :=
+  match env.outer with
+  | none   => newTop
+  | some o => { env with outer := some (o.replaceTop newTop) }
+
 end Env

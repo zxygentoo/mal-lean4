@@ -22,6 +22,7 @@ public inductive MalVal where
   | sym  : String → MalVal
   | list : List MalVal → MalVal
   | fn   : Fn → MalVal
+  | atom : Nat → MalVal
 
 /-- A callable: either a Lean-implemented `builtin` (looked up by name in
 `Core.builtinTable`) or a user-defined `lambda` from `fn*`.
