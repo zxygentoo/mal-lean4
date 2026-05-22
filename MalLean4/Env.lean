@@ -3,23 +3,34 @@ module
 public import MalLean4.Types
 open Types
 
-/-- The mal evaluation environment: an associative list mapping symbol names
-to their bound functions.
+/-- The mal evaluation environment: a chain of frames mapping symbol names to
+their bound values.
 
-Step 3 will introduce nested scopes and bindings for non-function values; for
-step 2 a flat list of builtins suffices.
+`let*` extends an env with a child frame; lookup walks outward to the parent
+on miss. Bindings are stored in the innermost frame and shadow any outer
+binding of the same name.
 -/
-public abbrev Env := List (String × MalFn)
+public inductive Env where
+  | mk (outer : Option Env) (data : List (String × MalVal))
 
 namespace Env
 
-def empty : Env := []
+/-- The empty (root) environment. -/
+public def empty : Env := .mk none []
 
-/-- Look up `name` in the environment, returning its bound function if any. -/
-public def get? (env : Env) (name : String) : Option MalFn :=
-  env.find? (·.1 == name) |>.map (·.2)
+/-- Create a child env whose lookups fall through to `parent` on miss. -/
+public def child (parent : Env) : Env := .mk (some parent) []
 
-def set (env : Env) (name : String) (f : MalFn) : Env :=
-  (name, f) :: env
+/-- Bind `name` to `v` in the innermost frame, shadowing any outer binding. -/
+public def set : Env → String → MalVal → Env
+  | .mk o d, k, v => .mk o ((k, v) :: d)
+
+/-- Look up `name`, walking parent frames on miss. -/
+public def find? : Env → String → Option MalVal
+  | .mk none d, k     => d.find? (·.1 == k) |>.map (·.2)
+  | .mk (some o) d, k =>
+    match d.find? (·.1 == k) with
+    | some (_, v) => some v
+    | none        => o.find? k
 
 end Env

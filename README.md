@@ -44,6 +44,7 @@ tests/
 | 0 — REPL         | `step0_repl`        | 4 / 4          |
 | 1 — read & print | `step1_read_print`  | 23 / 23        |
 | 2 — eval         | `step2_eval`        | 9 / 9          |
+| 3 — environments | `step3_env`         | 27 / 27        |
 
 Counts cover the spec-required cases only. Deferrable and optional cases
 (strings, nil/true/false, reader macros, vectors, hash-maps, quoting)

@@ -1,6 +1,6 @@
 name = "mal-lean4"
 version = "0.1.0"
-defaultTargets = ["step0_repl", "step1_read_print", "step2_eval"]
+defaultTargets = ["step0_repl", "step1_read_print", "step2_eval", "step3_env"]
 
 [[lean_lib]]
 name = "MalLean4"
@@ -17,3 +17,7 @@ root = "MalLean4.Step1ReadPrint"
 [[lean_exe]]
 name = "step2_eval"
 root = "MalLean4.Step2Eval"
+
+[[lean_exe]]
+name = "step3_env"
+root = "MalLean4.Step3Env"

@@ -9,10 +9,10 @@ def EVAL (env : Env) : MalVal → Except String MalVal
   | .list (head :: args)  => do
     match head with
     | .sym name =>
-      match env.get? name with
+      match env.find? name with
       | some f =>
         let argsV ← args.mapM (EVAL env)
-        f argsV
+        Core.apply f argsV
       | none   => .error s!"'{name}' not found"
     | _ => .error "first item in list is not callable"
   | .sym s                => .error s!"'{s}' not found"
