@@ -2,46 +2,43 @@ module
 
 namespace Types
 
-/-- The eval monad: IO so builtins like `prn` can print, with String-typed
-errors via `ExceptT`.
-
-We pick `ExceptT String IO` over `EIO String` (Lean's native "IO with typed
-error") because `IO` actions auto-lift in cleanly here — the underlying
-`IO.Error` channel is orthogonal to our `String` error channel. With
-`EIO String`, every call to `IO.println`/`stdin.getLine`/etc. would need an
-explicit `IO.Error → String` mapping at the boundary.
--/
+/-- The eval monad: IO for builtins like `prn`, with String-typed errors. -/
 public abbrev MalIO := ExceptT String IO
 
-/-- A handle to a callable registered with `Fn.register` (see `Fn.lean`).
-
-We'd write `fn : MalFn → MalVal` directly if Lean's strict positivity check
-allowed it (it doesn't — `MalVal` would appear under a `→` and the kernel
-rejects the inductive). The `Nat` id indirects through a process-wide
-registry; users interact via `Fn.register`/`Fn.apply` and a `CoeFun`
-instance, so the id is an implementation detail.
--/
-public structure Fn where
-  id : Nat
+mutual
 
 /-- The mal abstract syntax tree.
 
 Every value the interpreter manipulates — read from input, produced by
 `eval`, formatted by the printer — is one of these constructors. Functions
-(builtins and user-defined `fn*` closures alike) share the single `fn`
-constructor.
+share a single `fn` constructor that wraps `Fn`; the value type carries no
+indirection through a registry.
 -/
 public inductive MalVal where
   | nil
   | bool : Bool → MalVal
   | int  : Int → MalVal
-  | sym  : String → MalVal
   | str  : String → MalVal
+  | sym  : String → MalVal
   | list : List MalVal → MalVal
   | fn   : Fn → MalVal
 
-/-- The shape of a mal callable: receive already-evaluated arguments and
-return a result (or an error) in `MalIO`. -/
+/-- A callable: either a Lean-implemented `builtin` (looked up by name in
+`Core.builtinTable`) or a user-defined `lambda` from `fn*`.
+
+`lambda` is closure-converted: it stores its parameter names, its body AST,
+and a snapshot of free variables captured at `fn*` time. There is **no**
+captured `Env` — top-level lookups defer to the caller's env at apply time,
+which gives mal's "closures see later `def!`s" semantics while keeping the
+value type free of cycles.
+-/
+public inductive Fn where
+  | builtin : String → Fn
+  | lambda  (params : List String) (body : MalVal) (captures : List (String × MalVal)) : Fn
+
+end
+
+/-- The shape of a builtin: receive evaluated args, return result or error. -/
 public abbrev MalFn := List MalVal → MalIO MalVal
 
 end Types

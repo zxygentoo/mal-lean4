@@ -2,22 +2,20 @@ module
 
 public import MalLean4.Types
 public import MalLean4.Env
-public import MalLean4.Fn
 import MalLean4.Printer
 
 open Types
 
 namespace Core
 
-/-- Structural equality on `MalVal`. Lists compare element-wise; functions
-compare by handle id; mixed-type comparisons return `false`. -/
+/-- Structural equality on `MalVal`. Lists compare element-wise; builtins
+compare by name; user lambdas compare structurally too (rare to test for). -/
 public partial def malEqual : MalVal → MalVal → Bool
   | .nil,         .nil         => true
   | .bool a,      .bool b      => a == b
   | .int a,       .int b       => a == b
   | .sym a,       .sym b       => a == b
   | .str a,       .str b       => a == b
-  | .fn ⟨a⟩,      .fn ⟨b⟩      => a == b
   | .list xs,     .list ys     => listEqual xs ys
   | _,            _            => false
 where
@@ -59,7 +57,9 @@ private def prn : MalFn := fun args => do
   IO.println (" ".intercalate (args.map Printer.prStr))
   return .nil
 
-private def builtins : List (String × MalFn) :=
+/-- The static builtin table. Each entry maps a mal name to its Lean
+implementation. The table is a pure `def` — no `IO.Ref`, no `initialize`. -/
+private def table : List (String × MalFn) :=
   [ ("+",  intBinop (· + ·)),
     ("-",  intBinop (· - ·)),
     ("*",  intBinop (· * ·)),
@@ -75,17 +75,15 @@ private def builtins : List (String × MalFn) :=
     ("count",  countOp),
     ("prn",    prn) ]
 
-/-- The starting environment for the mal REPL.
+/-- Look up a builtin's implementation by name. -/
+public def builtin? (name : String) : Option MalFn :=
+  table.find? (·.1 == name) |>.map (·.2)
 
-Each builtin is registered as a `Fn` and bound by name. Builtins and
-user-defined closures share the single `MalVal.fn` representation, so
-`apply` is one dispatch in the evaluator.
--/
-public def initialEnv : IO Env := do
-  let env ← Env.empty
-  for (name, impl) in builtins do
-    let f ← Fn.register impl
-    env.set name (.fn f)
-  return env
+/-- The starting environment for the mal REPL. Each builtin is bound to a
+`MalVal.fn (.builtin name)` tag; `eval` dispatches `.builtin` through
+`Core.builtin?`. The env is pure data — no IO state at startup. -/
+public def initialEnv : Env :=
+  let bindings := table.map (fun (name, _) => (name, MalVal.fn (.builtin name)))
+  { current := bindings, outer := none }
 
 end Core

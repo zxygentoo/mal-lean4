@@ -1,46 +1,53 @@
 module
 
 public import MalLean4.Types
-public import Std.Data.HashMap.Basic
-
 open Types
 
-/-- The mal evaluation environment: a chain of frames mapping symbol names
-to their bound values.
+/-- A mal evaluation environment: a chain of frames mapping symbol names to
+their bound values.
 
-The innermost frame is mutable (an `IO.Ref` to a `Std.HashMap`); the outer
-pointer is plain and never changes. Mutation is required so that closures
-which capture an env later observe `def!`s into that env — see step 4 of
-the mal guide.
+Immutable. `def!` creates a new env with the updated current frame; `let*`
+adds a child frame whose `outer` points at its parent. The outermost frame
+(the one with `outer = none`) is the "top env" by convention; this lets us
+distinguish "local names a closure can snapshot at `fn*` time" from
+"top-level names that should be looked up at call time" without an extra
+flag.
 -/
 public structure Env where
-  current : IO.Ref (Std.HashMap String MalVal)
+  current : List (String × MalVal)
   outer   : Option Env
 
 namespace Env
 
-/-- A fresh root environment with no bindings. -/
-public def empty : IO Env := do
-  let r ← IO.mkRef ∅
-  return { current := r, outer := none }
+/-- A root environment with no bindings. -/
+public def empty : Env := ⟨[], none⟩
 
-/-- A fresh child env whose lookups fall through to `parent` on miss. -/
-public def child (parent : Env) : IO Env := do
-  let r ← IO.mkRef ∅
-  return { current := r, outer := some parent }
+/-- A child env whose lookups fall through to `parent`. -/
+public def child (parent : Env) : Env := ⟨[], some parent⟩
 
-/-- Bind `k` to `v` in the innermost frame. Shadows any outer binding. -/
-public def set (env : Env) (k : String) (v : MalVal) : IO Unit :=
-  env.current.modify (·.insert k v)
+/-- Bind `k` to `v` in the innermost frame (shadows any outer binding). -/
+public def set (env : Env) (k : String) (v : MalVal) : Env :=
+  { env with current := (k, v) :: env.current }
 
-/-- Look up `k`, walking parent frames on miss. -/
-public partial def find? (env : Env) (k : String) : IO (Option MalVal) := do
-  let data ← env.current.get
-  match data[k]? with
-  | some v => return some v
+/-- Look up `k` walking the entire chain. -/
+public partial def find? (env : Env) (k : String) : Option MalVal :=
+  match env.current.find? (·.1 == k) with
+  | some (_, v) => some v
   | none =>
     match env.outer with
-    | some p => p.find? k
-    | none   => return none
+    | some o => find? o k
+    | none   => none
+
+/-- Look up `k` walking only *local* frames, stopping before the top frame
+(the one with `outer = none`). Used at `fn*` time to decide which free
+variables to snapshot into the closure's captures and which to defer to
+call-time lookup. -/
+public partial def findLocal? (env : Env) (k : String) : Option MalVal :=
+  match env.outer with
+  | none   => none
+  | some o =>
+    match env.current.find? (·.1 == k) with
+    | some (_, v) => some v
+    | none        => findLocal? o k
 
 end Env
