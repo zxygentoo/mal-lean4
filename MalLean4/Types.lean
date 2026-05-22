@@ -39,4 +39,11 @@ public inductive Fn where
 
 end
 
+/-- Mal's truthiness: only `nil` and `false` are falsy. Everything else
+(including 0, the empty list, and the empty string) is truthy. -/
+public def MalVal.isTruthy : MalVal → Bool
+  | .nil        => false
+  | .bool false => false
+  | _           => true
+
 end Types

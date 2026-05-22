@@ -22,7 +22,7 @@ private initialize store : IO.Ref (Array (IO.Ref MalVal)) ← IO.mkRef #[]
 namespace Atoms
 
 /-- Allocate a fresh atom holding `v`, return its index. -/
-public def «new» (v : MalVal) : IO Nat := do
+public def new (v : MalVal) : IO Nat := do
   let cell ← IO.mkRef v
   let arr ← store.get
   store.set (arr.push cell)

@@ -5,12 +5,6 @@ import MalLean4.Printer
 
 open Types
 
-/-- Mal's truthiness: only `nil` and `false` are falsy. -/
-def isTruthy : MalVal → Bool
-  | .nil        => false
-  | .bool false => false
-  | _           => true
-
 mutual
   partial def eval (env : Env) : MalVal → MalIO MalVal
     | .list []                    => return .list []
@@ -76,9 +70,9 @@ mutual
 
   partial def evalIf (env : Env) : List MalVal → MalIO MalVal
     | [pred, thn] => do
-      if isTruthy (← eval env pred) then eval env thn else return .nil
+      if (← eval env pred).isTruthy then eval env thn else return .nil
     | [pred, thn, els] => do
-      if isTruthy (← eval env pred) then eval env thn else eval env els
+      if (← eval env pred).isTruthy then eval env thn else eval env els
     | _ => throw "if: expected (if pred then) or (if pred then else)"
 
   partial def evalFn (env : Env) : List MalVal → MalIO MalVal

@@ -2,7 +2,7 @@ module
 
 public import MalLean4.Types
 public import MalLean4.Env
-public import MalLean4.Atoms
+import MalLean4.Atoms
 import MalLean4.Printer
 import MalLean4.Reader
 
@@ -26,7 +26,7 @@ private abbrev MalFn := Context → List MalVal → MalIO MalVal
 
 /-- Structural equality on `MalVal`. Lists compare element-wise; atoms by
 identity (Nat id), so two `(atom 0)` calls produce non-equal values. -/
-public partial def malEqual : MalVal → MalVal → Bool
+private partial def malEqual : MalVal → MalVal → Bool
   | .nil,         .nil         => true
   | .bool a,      .bool b      => a == b
   | .int a,       .int b       => a == b
@@ -49,7 +49,7 @@ private def compOp (op : Int → Int → Bool) : MalFn := fun _ => fun
   | [.int a, .int b] => return .bool (op a b)
   | _                => throw "expected two integers"
 
-private def «=» : MalFn := fun _ => fun
+private def eq : MalFn := fun _ => fun
   | [a, b] => return .bool (malEqual a b)
   | _      => throw "=: expected two arguments"
 
@@ -75,7 +75,7 @@ private def prn : MalFn := fun _ args => do
   IO.println (" ".intercalate strs)
   return .nil
 
-private def «read-string» : MalFn := fun _ => fun
+private def readString : MalFn := fun _ => fun
   | [.str s] =>
     match Reader.readStr s with
     | .ok (some ast) => return ast
@@ -118,7 +118,7 @@ private def eval : MalFn := fun ctx => fun
   | [ast] => ctx.eval ctx.env.root ast
   | _     => throw "eval: expected one argument"
 
-private def «load-file» : MalFn := fun ctx => fun
+private def loadFile : MalFn := fun ctx => fun
   | [.str path] => do
     let content ← IO.FS.readFile path
     match Reader.readStr s!"(do {content}\nnil)" with
@@ -148,20 +148,20 @@ private def table : List (String × MalFn) :=
     ("<=", compOp (· ≤ ·)),
     (">",  compOp (· > ·)),
     (">=", compOp (· ≥ ·)),
-    ("=",           «=»),
+    ("=",           eq),
     ("list",        list),
     ("list?",       list?),
     ("empty?",      empty?),
     ("count",       count),
     ("prn",         prn),
-    ("read-string", «read-string»),
+    ("read-string", readString),
     ("slurp",       slurp),
     ("atom",        atom),
     ("atom?",       atom?),
     ("deref",       deref),
     ("reset!",      reset!),
     ("eval",        eval),
-    ("load-file",   «load-file»),
+    ("load-file",   loadFile),
     ("swap!",       swap!) ]
 
 /-- Dispatch a builtin by `name` with the step's `eval`/`apply` callbacks
