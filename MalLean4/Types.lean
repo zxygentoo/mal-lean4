@@ -39,7 +39,4 @@ public inductive Fn where
 
 end
 
-/-- The shape of a builtin: receive evaluated args, return result or error. -/
-public abbrev MalFn := List MalVal → MalIO MalVal
-
 end Types

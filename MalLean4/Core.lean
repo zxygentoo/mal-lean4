@@ -27,41 +27,41 @@ where
     | x :: xs, y :: ys => malEqual x y && listEqual xs ys
     | _,       _       => false
 
-private def intBinop (op : Int → Int → Int) : MalFn
+private def intBinop (op : Int → Int → Int) : MalFn := fun _ => fun
   | [.int a, .int b] => return .int (op a b)
   | _                => throw "expected two integers"
 
-private def compOp (op : Int → Int → Bool) : MalFn
+private def compOp (op : Int → Int → Bool) : MalFn := fun _ => fun
   | [.int a, .int b] => return .bool (op a b)
   | _                => throw "expected two integers"
 
-private def eqOp : MalFn
+private def «=» : MalFn := fun _ => fun
   | [a, b] => return .bool (malEqual a b)
   | _      => throw "=: expected two arguments"
 
-private def listOp : MalFn := fun args => return .list args
+private def list : MalFn := fun _ args => return .list args
 
-private def listQ : MalFn
+private def list? : MalFn := fun _ => fun
   | [.list _] => return .bool true
   | [_]       => return .bool false
   | _         => throw "list?: expected one argument"
 
-private def emptyQ : MalFn
+private def empty? : MalFn := fun _ => fun
   | [.list xs] => return .bool xs.isEmpty
   | [_]        => return .bool false
   | _          => throw "empty?: expected one argument"
 
-private def countOp : MalFn
+private def count : MalFn := fun _ => fun
   | [.list xs] => return .int xs.length
   | [_]        => return .int 0
   | _          => throw "count: expected one argument"
 
-private def prn : MalFn := fun args => do
+private def prn : MalFn := fun _ args => do
   let strs ← args.mapM fun v => (Printer.prStr v : IO String)
   IO.println (" ".intercalate strs)
   return .nil
 
-private def readString : MalFn
+private def «read-string» : MalFn := fun _ => fun
   | [.str s] =>
     match Reader.readStr s with
     | .ok (some ast) => return ast
@@ -69,36 +69,61 @@ private def readString : MalFn
     | .error e       => throw e
   | _ => throw "read-string: expected one string argument"
 
-private def slurp : MalFn
+private def slurp : MalFn := fun _ => fun
   | [.str path] => do
     let content ← IO.FS.readFile path
     return .str content
   | _ => throw "slurp: expected one string argument"
 
-private def atom : MalFn
+private def atom : MalFn := fun _ => fun
   | [v] => do
     let id ← Atoms.new v
     return .atom id
   | _ => throw "atom: expected one argument"
 
-private def atomQ : MalFn
+private def atom? : MalFn := fun _ => fun
   | [.atom _] => return .bool true
   | [_]       => return .bool false
   | _         => throw "atom?: expected one argument"
 
-private def deref : MalFn
+private def deref : MalFn := fun _ => fun
   | [.atom n] => do
     match ← Atoms.deref n with
     | some v => return v
     | none   => throw s!"deref: invalid atom #{n}"
   | _ => throw "deref: expected one atom argument"
 
-private def resetBang : MalFn
+private def reset! : MalFn := fun _ => fun
   | [.atom n, v] => do
     match ← Atoms.reset n v with
     | some r => return r
     | none   => throw s!"reset!: invalid atom #{n}"
   | _ => throw "reset!: expected (reset! atom value)"
+
+private def eval : MalFn := fun ctx => fun
+  | [ast] => ctx.eval ctx.env.root ast
+  | _     => throw "eval: expected one argument"
+
+private def «load-file» : MalFn := fun ctx => fun
+  | [.str path] => do
+    let content ← IO.FS.readFile path
+    match Reader.readStr s!"(do {content}\nnil)" with
+    | .ok (some ast) => do
+      let _ ← ctx.eval ctx.env.root ast
+      return .nil
+    | .ok none  => return .nil
+    | .error e  => throw e
+  | _ => throw "load-file: expected one string argument"
+
+private def swap! : MalFn := fun ctx => fun
+  | .atom n :: fnArg :: rest => do
+    match ← Atoms.deref n with
+    | some current => do
+      let newV ← ctx.apply fnArg (current :: rest)
+      let _ ← Atoms.reset n newV
+      return newV
+    | none => throw s!"swap!: invalid atom #{n}"
+  | _ => throw "swap!: expected (swap! atom fn args...)"
 
 private def table : List (String × MalFn) :=
   [ ("+",  intBinop (· + ·)),
@@ -109,36 +134,34 @@ private def table : List (String × MalFn) :=
     ("<=", compOp (· ≤ ·)),
     (">",  compOp (· > ·)),
     (">=", compOp (· ≥ ·)),
-    ("=",  eqOp),
-    ("list",   listOp),
-    ("list?",  listQ),
-    ("empty?", emptyQ),
-    ("count",  countOp),
-    ("prn",    prn),
-    ("read-string", readString),
+    ("=",           «=»),
+    ("list",        list),
+    ("list?",       list?),
+    ("empty?",      empty?),
+    ("count",       count),
+    ("prn",         prn),
+    ("read-string", «read-string»),
     ("slurp",       slurp),
     ("atom",        atom),
-    ("atom?",       atomQ),
+    ("atom?",       atom?),
     ("deref",       deref),
-    ("reset!",      resetBang) ]
+    ("reset!",      reset!),
+    ("eval",        eval),
+    ("load-file",   «load-file»),
+    ("swap!",       swap!) ]
 
-/-- Look up a pure builtin's implementation by name. `eval`, `load-file`,
-and `swap!` are *not* here — they need env/internal-eval access and are
-handled by the step's `apply`. -/
+/-- Look up a builtin's implementation by name. -/
 public def builtin? (name : String) : Option MalFn :=
   table.find? (·.1 == name) |>.map (·.2)
 
-/-- The names of step-6 stateful builtins. Bound to `.fn (.builtin name)` so
-they live in the env as values; the step's `apply` matches on the name to
-dispatch to env-aware code. -/
-public def step6StatefulNames : List String := ["eval", "load-file", "swap!"]
-
-/-- The starting environment for the mal REPL. Builtins (pure and stateful)
-are all bound by name to `.fn (.builtin name)`. -/
-public def initialEnv : Env :=
-  let pureBindings := table.map (fun (name, _) => (name, MalVal.fn (.builtin name)))
-  let statefulBindings := step6StatefulNames.map (fun name =>
-    (name, MalVal.fn (.builtin name)))
-  { current := pureBindings ++ statefulBindings, outer := none }
+/-- The starting environment for the mal REPL. Every builtin from `table`
+is bound by name to `.fn (.builtin name)`. Env-aware builtins
+(`eval`/`load-file`/`swap!`) live in the same table — they use the
+`Context` arg to reach the step's `eval`/`apply`. -/
+public def initialEnv : IO Env := do
+  let env ← Env.empty
+  for (name, _) in table do
+    env.set name (.fn (.builtin name))
+  return env
 
 end Core
