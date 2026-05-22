@@ -9,22 +9,47 @@ def isSeparator (c : Char) : Bool :=
   c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ','
 
 def isSpecial (c : Char) : Bool :=
-  c == '(' || c == ')' || c == ';'
+  c == '(' || c == ')' || c == '[' || c == ']' || c == ';' || c == '"'
 
 def isTokenChar (c : Char) : Bool :=
   !isSeparator c && !isSpecial c
 
-def readAtom (t : String) : MalVal :=
-  match t.toInt? with
-  | some n => .int n
-  | none   => .sym t
+private partial def unescape : List Char → List Char
+  | [] => []
+  | '\\' :: c :: rest =>
+    let r := match c with
+      | 'n'  => '\n'
+      | '\\' => '\\'
+      | '"'  => '"'
+      | other => other
+    r :: unescape rest
+  | c :: rest => c :: unescape rest
+
+def readAtom (t : String) : Except String MalVal :=
+  match t.toList with
+  | '"' :: rest =>
+    match rest.reverse with
+    | '"' :: bodyRev =>
+      .ok (.str (String.ofList (unescape bodyRev.reverse)))
+    | _ => .error "unterminated string"
+  | _ =>
+    match t with
+    | "nil"   => .ok .nil
+    | "true"  => .ok (.bool true)
+    | "false" => .ok (.bool false)
+    | _       =>
+      match t.toInt? with
+      | some n => .ok (.int n)
+      | none   => .ok (.sym t)
 
 mutual
   partial def readForm : List String → Except String (MalVal × List String)
     | []          => .error "unexpected EOF"
     | "(" :: rest => readList #[] rest
     | ")" :: _    => .error "unexpected ')'"
-    | t :: rest   => .ok (readAtom t, rest)
+    | t :: rest   => do
+      let atom ← readAtom t
+      .ok (atom, rest)
 
   partial def readList (acc : Array MalVal) :
       List String → Except String (MalVal × List String)
@@ -35,15 +60,27 @@ mutual
       readList (acc.push form) rest
 end
 
+private partial def readStringToken (chars : List Char) (acc : List Char) :
+    String × List Char :=
+  match chars with
+  | []               => (String.ofList ('"' :: acc.reverse), [])
+  | '"' :: rest      => (String.ofList ('"' :: acc.reverse ++ ['"']), rest)
+  | '\\' :: c :: rest => readStringToken rest (c :: '\\' :: acc)
+  | c :: rest        => readStringToken rest (c :: acc)
+
 partial def tokenize (input : String) : List String :=
   go input.toList
 where
   go : List Char → List String
     | [] => []
     | ';' :: rest => go (rest.dropWhile (· != '\n'))
+    | '"' :: rest =>
+      let (tok, rest') := readStringToken rest []
+      tok :: go rest'
     | c :: rest =>
       if isSeparator c then go rest
-      else if c == '(' || c == ')' then String.singleton c :: go rest
+      else if c == '(' || c == '[' then "(" :: go rest
+      else if c == ')' || c == ']' then ")" :: go rest
       else
         let (taken, rest') := (c :: rest).span isTokenChar
         String.ofList taken :: go rest'

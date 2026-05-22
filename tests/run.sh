@@ -20,6 +20,7 @@ declare -A STEP_OPTS=(
   [step1_read_print]="--no-deferrable --no-optional"
   [step2_eval]="--no-deferrable --no-optional"
   [step3_env]="--no-deferrable --no-optional"
+  [step4_if_fn_do]="--no-deferrable --no-optional"
 )
 
 normalize() {

@@ -24,9 +24,10 @@ tests/run.sh step2_eval          # run tests for one step
 
 ```
 MalLean4/
-  Types.lean         MalVal + MalFn
-  Env.lean           evaluation environment
-  Core.lean          arithmetic builtins + initial env
+  Types.lean         MalVal + MalFn + MalM
+  Env.lean           evaluation environment (mutable via IO.Ref)
+  Closure.lean       user-defined function registry
+  Core.lean          builtins + initial env
   Reader.lean        tokenizer + parser (hand-written, no regex)
   Printer.lean       pretty-printer
   Step*.lean         one file per step's executable
@@ -39,12 +40,13 @@ tests/
 
 ## Status
 
-| Step             | Executable          | Required tests |
-|------------------|---------------------|----------------|
-| 0 — REPL         | `step0_repl`        | 4 / 4          |
-| 1 — read & print | `step1_read_print`  | 23 / 23        |
-| 2 — eval         | `step2_eval`        | 9 / 9          |
-| 3 — environments | `step3_env`         | 27 / 27        |
+| Step              | Executable          | Required tests |
+|-------------------|---------------------|----------------|
+| 0 — REPL          | `step0_repl`        | 4 / 4          |
+| 1 — read & print  | `step1_read_print`  | 23 / 23        |
+| 2 — eval          | `step2_eval`        | 9 / 9          |
+| 3 — environments  | `step3_env`         | 27 / 27        |
+| 4 — if/fn/do      | `step4_if_fn_do`    | 107 / 107      |
 
 Counts cover the spec-required cases only. Deferrable and optional cases
 (strings, nil/true/false, reader macros, vectors, hash-maps, quoting)
