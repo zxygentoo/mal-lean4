@@ -20,28 +20,28 @@ mutual
     lookupSym (s : String) : MalIO MalVal := do
       match ← env.find? s with
       | some v => return v
-      | none   => throw s!"'{s}' not found"
+      | none   => throw (.str s!"'{s}' not found")
 
   partial def apply (callerEnv : Env) (head : MalVal)
       (args : List MalVal) : MalIO MalVal := do
     match head with
     | .fn (.builtin name) =>
       Core.callBuiltin name callerEnv eval (apply callerEnv) args
-    | _ => throw "first item in list is not callable"
+    | _ => throw (.str "first item in list is not callable")
 
   partial def evalDef (env : Env) : List MalVal → MalIO MalVal
     | [.sym name, expr] => do
       let v ← eval env expr
       env.set name v
       return v
-    | _ => throw "def!: expected (def! name expr)"
+    | _ => throw (.str "def!: expected (def! name expr)")
 
   partial def evalLet (env : Env) : List MalVal → MalIO MalVal
     | [.list bindings, body] => do
       let letEnv ← env.new
       bindLet letEnv bindings
       eval letEnv body
-    | _ => throw "let*: expected (let* (bindings) body)"
+    | _ => throw (.str "let*: expected (let* (bindings) body)")
 
   partial def bindLet (env : Env) : List MalVal → MalIO Unit
     | []                    => return ()
@@ -49,7 +49,7 @@ mutual
       let v ← eval env rhs
       env.set k v
       bindLet env rest
-    | _ => throw "let*: bindings must be symbol/expr pairs"
+    | _ => throw (.str "let*: bindings must be symbol/expr pairs")
 end
 
 def READ  (s : String)   : Except String (Option MalVal) := Reader.readStr s
@@ -61,7 +61,7 @@ def rep (env : Env) (s : String) : IO (Option String) := do
   | .ok (some ast) =>
     match ← (eval env ast).run with
     | .ok v    => return some (← PRINT v)
-    | .error e => return some s!"Error: {e}"
+    | .error e => return some s!"Error: {← Printer.prStr e}"
   | .error e       => return some s!"Error: {e}"
 
 partial def loop (env : Env) (stdin stdout : IO.FS.Stream) : IO Unit := do

@@ -2,9 +2,6 @@ module
 
 namespace Types
 
-/-- The eval monad: IO for builtins like `prn`, with String-typed errors. -/
-public abbrev MalIO := ExceptT String IO
-
 mutual
 
 /-- The mal abstract syntax tree. Every value the interpreter manipulates
@@ -31,13 +28,25 @@ of free variables captured at `fn*` time. No `Env` is stored; unresolved
 names defer to the caller's env at apply time. -/
 public structure Lambda where
   public mk ::
+  /-- True when bound via `defmacro!`; eval expands macro calls before
+  applying. -/
   public isMacro  : Bool := false
+  /-- Parameter names, in positional order. -/
   public params   : List String
+  /-- Unevaluated body form; `apply` evaluates this against the call-time env. -/
   public body     : MalVal
   /-- Free-variable snapshot taken at `fn*` time: `(name, value)` pairs. -/
   public snapshot : List (String × MalVal)
 
 end
+
+/-- The eval monad: IO for builtins like `prn`, with `MalVal`-typed errors
+so user-thrown values (from `throw`) can be caught structurally by `try*`. -/
+public abbrev MalIO := ExceptT MalVal IO
+
+/-- Auto-coerce `String` to `MalVal` so existing `throw (.str "...")` sites keep
+working after the error channel switched from `String` to `MalVal`. -/
+public instance : Coe String MalVal := ⟨MalVal.str⟩
 
 /-- Mal's truthiness: only `nil` and `false` are falsy. Everything else
 (including 0, the empty list, and the empty string) is truthy. -/

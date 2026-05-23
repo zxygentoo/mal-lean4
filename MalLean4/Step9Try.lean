@@ -38,6 +38,7 @@ mutual
     | .list (.sym "quote"       :: rest) => evalQuote rest
     | .list (.sym "quasiquote"  :: rest) => evalQuasiquote env rest
     | .list (.sym "macroexpand" :: rest) => evalMacroexpand env rest
+    | .list (.sym "try*"        :: rest) => evalTry env rest
     | .list (head :: args)               => evalCall env head args
     | .sym s                             => lookupSym env s
     | other                              => return other
@@ -53,8 +54,6 @@ mutual
     | some v => return v
     | none   => throw (.str s!"'{s}' not found")
 
-  /-- Repeatedly expand a macro call until the head no longer resolves to a
-  macro lambda. Non-macro calls and non-list forms pass through unchanged. -/
   partial def macroexpand (env : Env) : MalVal → MalIO MalVal := fun ast => do
     match ast with
     | .list (.sym name :: args) =>
@@ -152,6 +151,16 @@ mutual
   partial def evalMacroexpand (env : Env) : List MalVal → MalIO MalVal
     | [arg] => macroexpand env arg
     | _ => throw (.str "macroexpand: expected 1 argument")
+
+  /-- `(try* expr (catch* binding handler))`: eval `expr`; if it throws, bind
+  the thrown `MalVal` to `binding` in a new env frame and eval `handler`. -/
+  partial def evalTry (env : Env) : List MalVal → MalIO MalVal
+    | [tryExpr, .list [.sym "catch*", .sym binding, handler]] =>
+      tryCatch (eval env tryExpr) fun thrown => do
+        let catchEnv ← env.new
+        catchEnv.set binding thrown
+        eval catchEnv handler
+    | _ => throw (.str "try*: expected (try* expr (catch* sym handler))")
 end
 
 def READ  (s : String)   : Except String (Option MalVal) := Reader.readStr s

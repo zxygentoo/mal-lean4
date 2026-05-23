@@ -9,7 +9,8 @@ defaultTargets = [
     "step5_tco",
     "step6_file",
     "step7_quote",
-    "step8_macros"
+    "step8_macros",
+    "step9_try"
 ]
 
 [[lean_lib]]
@@ -51,3 +52,7 @@ root = "MalLean4.Step7Quote"
 [[lean_exe]]
 name = "step8_macros"
 root = "MalLean4.Step8Macros"
+
+[[lean_exe]]
+name = "step9_try"
+root = "MalLean4.Step9Try"

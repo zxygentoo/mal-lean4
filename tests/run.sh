@@ -25,6 +25,7 @@ declare -A STEP_OPTS=(
   [step6_file]="--no-deferrable --no-optional"
   [step7_quote]="--no-deferrable --no-optional"
   [step8_macros]="--no-deferrable --no-optional"
+  [step9_try]="--no-deferrable --no-optional"
 )
 
 normalize() {

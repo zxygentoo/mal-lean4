@@ -18,14 +18,14 @@ mutual
     lookupSym (s : String) : MalIO MalVal := do
       match ← env.find? s with
       | some v => return v
-      | none   => throw s!"'{s}' not found"
+      | none   => throw (.str s!"'{s}' not found")
 
   partial def apply (callerEnv : Env) (head : MalVal)
       (args : List MalVal) : MalIO MalVal := do
     match head with
     | .fn (.builtin name) =>
       Core.callBuiltin name callerEnv EVAL (apply callerEnv) args
-    | _ => throw "first item in list is not callable"
+    | _ => throw (.str "first item in list is not callable")
 end
 
 def READ  (s : String)   : Except String (Option MalVal) := Reader.readStr s
@@ -37,7 +37,7 @@ def rep (env : Env) (s : String) : IO (Option String) := do
   | .ok (some ast) =>
     match ← (EVAL env ast).run with
     | .ok v    => return some (← PRINT v)
-    | .error e => return some s!"Error: {e}"
+    | .error e => return some s!"Error: {← Printer.prStr e}"
   | .error e       => return some s!"Error: {e}"
 
 partial def loop (env : Env) (stdin stdout : IO.FS.Stream) : IO Unit := do
