@@ -1,5 +1,6 @@
 import MalLean4.Core
 import MalLean4.Debug
+import MalLean4.GC
 import MalLean4.Reader
 import MalLean4.Printer
 
@@ -86,6 +87,10 @@ mutual
     | [last]  => eval env last
     | x :: xs => do
       let _ ← eval env x
+      -- Between sequenced forms is a host-eval-safe GC point: the previous
+      -- result was discarded, remaining `xs` are AST (no closures), and
+      -- walking `env` catches everything still live.
+      GC.maybeRun env
       evalDo env xs
 
   partial def evalIf (env : Env) : List MalVal → MalIO MalVal
@@ -126,6 +131,7 @@ partial def loop (env : Env) (stdin stdout : IO.FS.Stream) : IO Unit := do
   if line.isEmpty then return
   if let some out ← rep env line then
     stdout.putStrLn out
+  GC.maybeRun env
   loop env stdin stdout
 
 def main : IO Unit := do

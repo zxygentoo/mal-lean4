@@ -29,6 +29,7 @@ MalLean4/
   Atoms.lean         atom registry (mal's explicit mutable cells)
   Core.lean          builtins + initialEnv + Context (private)
   Debug.lean         DEBUG-EVAL trace hook
+  GC.lean            mark-and-sweep over `Env.store` and `Atoms.store`
   Reader.lean        tokenizer + parser (hand-written, no regex)
   Printer.lean       pretty-printer
   Step*.lean         one file per step's executable

@@ -16,23 +16,32 @@ namespace Env
 
 /-- Backing store for env handles. `Lambda.outerEnvId` indexes into this
 table so the env reference doesn't appear directly inside `MalVal` (which
-would break strict positivity, same shape as `Atoms.store`). -/
-initialize store : IO.Ref (Array Env) ← IO.mkRef #[]
+would break strict positivity, same shape as `Atoms.store`). Entries
+become `none` after `GC.run` collects them. -/
+public initialize store : IO.Ref (Array (Option Env)) ← IO.mkRef #[]
+
+/-- Registrations since the last `GC.run`. Incremented by `register`,
+reset by the GC after each sweep. `GC.maybeRun`'s hot-path check is just
+a `Nat` read + compare; nothing reads the bigger `store` array unless we
+actually sweep. -/
+public initialize sinceLastSweep : IO.Ref Nat ← IO.mkRef 0
 
 /-- Stash `env` in the registry and return its handle. -/
 public def register (env : Env) : IO Nat := do
   let arr ← store.get
-  store.set (arr.push env)
+  store.set (arr.push (some env))
+  sinceLastSweep.modify (· + 1)
   return arr.size
 
-/-- Look up the env at `id`. Errors with a clear panic if the id is unknown
-— this can only happen if a `Lambda` outlives its registry slot, which the
-current implementation never does (the registry grows monotonically). -/
+/-- Look up the env at `id`. Panics if the id was either never registered
+or was swept by `GC.run`; reaching either case means a `Lambda` outlived a
+reference the GC didn't see, which is a bug. -/
 public partial def lookup (id : Nat) : IO Env := do
   let arr ← store.get
   match arr[id]? with
-  | some env => return env
-  | none     => panic! s!"Env.lookup: invalid id {id} (table size {arr.size})"
+  | some (some env) => return env
+  | some none       => panic! s!"Env.lookup: id {id} was garbage collected"
+  | none            => panic! s!"Env.lookup: invalid id {id} (table size {arr.size})"
 
 /-- A root environment with no bindings. -/
 public def empty : IO Env := do

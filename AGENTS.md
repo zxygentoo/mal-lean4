@@ -88,19 +88,15 @@ Skip the alignment entirely for a match where one pattern is so much
 longer than its peers that padding would create comically wide gaps —
 readability beats mechanical consistency.
 
-## Known leaks
+## External-table indirection
 
-The `Atoms.store` (`IO.Ref (Array (IO.Ref MalVal))` in `Atoms.lean`) and
-the `Env.store` (`IO.Ref (Array Env)` in `Env.lean`) both grow
-monotonically — neither has compaction. Atoms allocated in transient
-scopes and closures whose `Lambda.outerEnvId` outlives the env they
-captured both keep memory alive past the visible mal scope.
-
-Both indirections are structural, not bugs: Lean's strict positivity
-rejects `Atom : IO.Ref MalVal → MalVal` and `Lambda { outerEnv : Env }`
-directly (because `Env` chains back through `MalVal`), so each constructor
-holds a `Nat` id into an external table. The table is the storage that
-keeps the referenced data alive.
+`MalVal.atom n` and `Lambda.outerEnvId` both index into external tables
+(`Atoms.store` in `Atoms.lean`, `Env.store` in `Env.lean`) instead of
+holding the referent directly. The indirection is structural, not a
+bug: Lean's strict positivity rejects `MalVal.atom : IO.Ref MalVal → MalVal`
+and `Lambda { outerEnv : Env }` directly (because `Env` chains back
+through `MalVal`), so each constructor holds a `Nat` id and the table
+stores the actual data.
 
 Real fixes considered and rejected:
 - `unsafe inductive` for the atom and env cases — contagious `unsafe`
@@ -108,14 +104,35 @@ Real fixes considered and rejected:
 - `opaque Cell : Type` with FFI-backed `IO.Ref MalVal` underneath — gets
   proper RC, but requires C glue and shifts the project from "Lean only"
   to "Lean + FFI."
-- Periodic compaction of the table — requires walking live values to
-  compute liveness, substantial work.
 
-The leak is bounded by atom-creation and `fn*` count within a single
-process. The test harness uses fresh processes per step, so tests don't
-observe it. An interactive session that defines thousands of atoms or
-closures accumulates a few hundred KB; this is acceptable for the
-project's scope.
+## Garbage collection
+
+`GC.lean` implements mark-and-sweep over the two tables: walk every value
+reachable from the root env (lists/vectors/maps/meta wrappers descend
+into their children, lambdas mark their `outerEnvId` and recurse into
+that env's bindings, atoms mark their id and recurse into the cell's
+value), then `none`-out unreached slots in both stores. The array itself
+still grows by one `Option` slot per allocation; the heavy payload (the
+captured frame's `HashMap` and the values it pinned) becomes collectable.
+
+`GC.maybeRun` fires at two host-safe points: (1) the REPL loop between
+top-level expressions and (2) between sequenced forms inside `evalDo`'s
+`x :: xs` case. The trigger threshold is ~1000 new `Env.store`
+registrations since the last sweep.
+
+`evalDo`-between-forms is safe because the previous form's result has
+been bound to `_` (discarded), the remaining `xs` are unevaluated AST
+(no live closures), and walking `env` catches everything that's still
+live. This covers script-mode self-host: both mal-in-mal's main REPL
+loop and its `EVAL` body are `(do …)` sequences, so GC fires once per
+mal-level expression even though our host REPL loop never gets a turn.
+
+Other "between sub-evaluations" spots aren't safe — `evalLet` would
+need to walk from `letEnv` instead of `env` (the new bindings aren't
+reachable from `env` yet), and `evalCall` mid-args has partially built
+values on the host stack that aren't in any env. No `(gc)` builtin is
+exposed for the same reason: user code can't reliably tell whether
+it's at a host-safe point.
 
 ## Closures and lexical scope
 
