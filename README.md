@@ -18,6 +18,7 @@ lake build                       # build all step binaries
 lake exe step2_eval              # run a step interactively
 tests/run.sh                     # run the mal test harness on all steps
 tests/run.sh step2_eval          # run tests for one step
+tests/run.sh lib                 # run lib tests against stepA_mal
 ```
 
 ## Project layout
@@ -44,7 +45,7 @@ tests/
 
 ## Status
 
-All 863 tests across all 11 steps pass — required, deferrable, and optional:
+All 863 step tests pass — required, deferrable, and optional:
 
 | Step              | Executable          | Tests           |
 |-------------------|---------------------|-----------------|
@@ -59,6 +60,11 @@ All 863 tests across all 11 steps pass — required, deferrable, and optional:
 | 8 — macros        | `step8_macros`      | 61 / 61         |
 | 9 — try/catch     | `step9_try`         | 173 / 173       |
 | A — mal           | `stepA_mal`         | 113 / 113       |
+
+The upstream library tests (`tests/lib/*.mal`) also pass: 168 / 169
+against `stepA_mal`. The single failure is `memoize.mal`, which runs
+naïve `(fib 32)` — exponential without TCO, our recursive eval just times
+out.
 
 Step5's "TCO" is not real TCO — the recursive interpreter relies on
 Lean's compiler turning monadic tail calls into jumps, which is sufficient

@@ -7,6 +7,7 @@
 #   tests/run.sh step0_repl.mal        # step0_repl, step0_repl.mal,
 #   tests/run.sh tests/step0_repl.mal  # or tests/step0_repl.mal)
 #   tests/run.sh step1_read_print --no-deferrable
+#   tests/run.sh lib                   # run library tests against stepA_mal
 #
 # Extra args after the step are forwarded to runtest.py.
 
@@ -59,10 +60,34 @@ run_one() {
   fi
 }
 
+run_lib() {
+  lake build stepA_mal >/dev/null
+  local bin="$(pwd)/.lake/build/bin/stepA_mal"
+  local pass=0 fail=0 soft=0
+  for t in tests/lib/*.mal; do
+    local name="${t##*/}"; name="${name%.mal}"
+    echo "=== lib/$name ==="
+    # `--rundir MalLean4` makes the binary's cwd `mal-lean4/MalLean4/`, so
+    # the library tests' `../lib/X.mal` and `../tests/Y.mal` references
+    # resolve to our top-level `lib/` and `tests/`.
+    local out
+    out=$(python3 -W ignore::SyntaxWarning tests/runtest.py \
+            --rundir MalLean4 "$@" "$(pwd)/$t" -- "$bin" 2>&1) || true
+    echo "$out" | tail -5
+    pass=$((pass + $(echo "$out" | awk '/[0-9]+: passing tests/{gsub(":","",$1); print $1}')))
+    soft=$((soft + $(echo "$out" | awk '/[0-9]+: soft failing tests/{gsub(":","",$1); print $1}')))
+    fail=$((fail + $(echo "$out" | awk '/^[[:space:]]+[0-9]+: failing tests/{gsub(":","",$1); print $1}')))
+  done
+  echo "=== lib total: $pass passing, $soft soft, $fail failing ==="
+}
+
 if [[ $# -eq 0 ]]; then
   for step in "${!STEP_OPTS[@]}"; do
     run_one "$step"
   done
+elif [[ "$1" == "lib" ]]; then
+  shift
+  run_lib "$@"
 else
   step="$1"; shift
   run_one "$step" "$@"
