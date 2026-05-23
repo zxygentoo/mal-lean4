@@ -90,26 +90,57 @@ readability beats mechanical consistency.
 
 ## Known leaks
 
-The `Atoms.store` (`IO.Ref (Array (IO.Ref MalVal))` in `Atoms.lean`) holds
-every atom for the lifetime of the process. Atoms allocated in transient
-scopes (e.g. `(let* (a (atom 0)) (do-something-without-returning-a))`)
-don't get freed even when their `MalVal.atom` handle is unreferenced.
+The `Atoms.store` (`IO.Ref (Array (IO.Ref MalVal))` in `Atoms.lean`) and
+the `Env.store` (`IO.Ref (Array Env)` in `Env.lean`) both grow
+monotonically — neither has compaction. Atoms allocated in transient
+scopes and closures whose `Lambda.outerEnvId` outlives the env they
+captured both keep memory alive past the visible mal scope.
 
-This is structural, not a bug: Lean's strict positivity rejects
-`Atom : IO.Ref MalVal → MalVal` directly, so we indirect through a `Nat`
-id into an external table. The table is the storage that keeps the cells
-alive past their use.
+Both indirections are structural, not bugs: Lean's strict positivity
+rejects `Atom : IO.Ref MalVal → MalVal` and `Lambda { outerEnv : Env }`
+directly (because `Env` chains back through `MalVal`), so each constructor
+holds a `Nat` id into an external table. The table is the storage that
+keeps the referenced data alive.
 
 Real fixes considered and rejected:
-- `unsafe inductive` for the atom case — contagious `unsafe` keyword across
-  every `MalVal`-touching def. Same tradeoff we declined for closures.
+- `unsafe inductive` for the atom and env cases — contagious `unsafe`
+  keyword across every `MalVal`-touching def.
 - `opaque Cell : Type` with FFI-backed `IO.Ref MalVal` underneath — gets
   proper RC, but requires C glue and shifts the project from "Lean only"
   to "Lean + FFI."
 - Periodic compaction of the table — requires walking live values to
   compute liveness, substantial work.
 
-The leak is bounded by atom-creation count within a single process. The
-test harness uses fresh processes per step, so tests don't observe it.
-An interactive session that defines a thousand atoms accumulates ~hundreds
-of KB; this is acceptable for the project's scope.
+The leak is bounded by atom-creation and `fn*` count within a single
+process. The test harness uses fresh processes per step, so tests don't
+observe it. An interactive session that defines thousands of atoms or
+closures accumulates a few hundred KB; this is acceptable for the
+project's scope.
+
+## Closures and lexical scope
+
+`Lambda` stores `outerEnvId : Nat` instead of capturing free variables by
+value. At `fn*` time, `Env.register env` files the current env in
+`Env.store` and the id goes into the lambda. At `apply` time, we
+`Env.lookup l.outerId` to retrieve the env and create the closure's
+binding frame as its child — not as a child of the caller's env.
+
+This matters for two things:
+- **Lexical scope**: `(let* (x 3) (a))` where `a` was defined at top
+  level with body referencing `x` sees the top-level `x`, not the let's.
+- **Live updates**: `(def! x 1) (def! f (fn* () x)) (def! x 2) (f)`
+  returns 2, because the closure looks `x` up in the captured env at
+  call time.
+
+`Env.findLocal?` and a separate `FreeVars` analysis used to live here for
+value-snapshot capture — both are gone now that the id-based approach
+makes them unnecessary.
+
+## Metadata
+
+`MalVal.withMeta value meta` is a wrapping constructor. The printer,
+equality, and every type predicate transparently strip the wrapper via
+`MalVal.strip`; only `meta` and `with-meta` (and `apply` when deciding
+whether the head is callable) see it. Construction sites in the reader
+(`^meta value` reader macro) and the runtime (`with-meta` builtin) are
+the only places that produce `.withMeta`.

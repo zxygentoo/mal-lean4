@@ -24,11 +24,11 @@ tests/run.sh step2_eval          # run tests for one step
 
 ```
 MalLean4/
-  Types.lean         MalVal (incl. vec/map/keyword) + Fn (closure-converted lambdas)
-  Env.lean           evaluation environment (IO.Ref + HashMap, mutable)
+  Types.lean         MalVal (incl. vec/map/keyword/withMeta wrapper) + Fn + Lambda
+  Env.lean           env frames + global env registry (`Env.store`, indexed by Nat)
   Atoms.lean         atom registry (mal's explicit mutable cells)
-  FreeVars.lean      free-variable analysis for closure capture
   Core.lean          builtins + initialEnv + Context (private)
+  Debug.lean         DEBUG-EVAL trace hook
   Reader.lean        tokenizer + parser (hand-written, no regex)
   Printer.lean       pretty-printer
   Step*.lean         one file per step's executable
@@ -43,30 +43,27 @@ tests/
 
 ## Status
 
-| Step              | Executable          | Required tests |
-|-------------------|---------------------|----------------|
-| 0 — REPL          | `step0_repl`        | 4 / 4          |
-| 1 — read & print  | `step1_read_print`  | 23 / 23        |
-| 2 — eval          | `step2_eval`        | 9 / 9          |
-| 3 — environments  | `step3_env`         | 27 / 27        |
-| 4 — if/fn/do      | `step4_if_fn_do`    | 107 / 107      |
-| 5 — TCO           | `step5_tco`         | 8 / 8          |
-| 6 — file/eval     | `step6_file`        | 38 / 38        |
-| 7 — quote         | `step7_quote`       | 59 / 59        |
-| 8 — macros        | `step8_macros`      | 14 / 14        |
-| 9 — try/catch     | `step9_try`         | 48 / 48        |
-| A — mal           | `stepA_mal`         | 3 / 3 required, 26 / 26 deferrable |
+All 863 tests across all 11 steps pass — required, deferrable, and optional:
 
-Counts cover the spec-required cases only. Deferrable and optional cases
-(strings, nil/true/false, reader macros, vectors, hash-maps, quoting)
-come online with their assigned later steps. stepA also passes its
-deferrable suite (vectors, hash-maps, keywords, `&` rest args, type
-predicates, `seq`/`conj`, `time-ms`); the optional `meta`/`with-meta`
-storage roundtrip is stubbed (returns nil) and remains a soft failure.
+| Step              | Executable          | Tests           |
+|-------------------|---------------------|-----------------|
+| 0 — REPL          | `step0_repl`        | 4 / 4           |
+| 1 — read & print  | `step1_read_print`  | 64 / 64         |
+| 2 — eval          | `step2_eval`        | 12 / 12         |
+| 3 — environments  | `step3_env`         | 38 / 38         |
+| 4 — if/fn/do      | `step4_if_fn_do`    | 199 / 199       |
+| 5 — TCO           | `step5_tco`         | 8 / 8           |
+| 6 — file/eval     | `step6_file`        | 71 / 71         |
+| 7 — quote         | `step7_quote`       | 124 / 124       |
+| 8 — macros        | `step8_macros`      | 61 / 61         |
+| 9 — try/catch     | `step9_try`         | 173 / 173       |
+| A — mal           | `stepA_mal`         | 113 / 113       |
 
-A naive self-hosting smoke test works (`stepA_mal stepA_mal.mal` from the
-upstream `impls/mal/`), but the bytecode-style interpreter has no
-explicit TCO: deep recursion under self-host is impractically slow (a few
-hundred iterations completes; a few thousand does not).
+Step5's "TCO" is not real TCO — the recursive interpreter relies on
+Lean's compiler turning monadic tail calls into jumps, which is sufficient
+for the native step tests. A naive self-hosting smoke test works
+(`stepA_mal stepA_mal.mal` from the upstream `impls/mal/`); deep recursion
+under self-host is impractically slow because the mal-in-mal eval loop
+isn't constant-stack at the Lean level.
 
 See [AGENTS.md](AGENTS.md) for project conventions.

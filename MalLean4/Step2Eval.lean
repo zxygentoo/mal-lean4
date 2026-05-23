@@ -8,6 +8,9 @@ mutual
   partial def EVAL (env : Env) : MalVal → MalIO MalVal
     | .list []             => return .list []
     | .list (head :: args) => evalCall head args
+    | .vec  xs             => do return .vec (← xs.mapM (EVAL env))
+    | .map  ps             => do
+      return .map (← ps.mapM fun (k, v) => return (k, ← EVAL env v))
     | .sym s               => lookupSym s
     | other                => return other
   where
@@ -22,7 +25,7 @@ mutual
 
   partial def apply (callerEnv : Env) (head : MalVal)
       (args : List MalVal) : MalIO MalVal := do
-    match head with
+    match head.strip with
     | .fn (.builtin name) =>
       Core.callBuiltin name callerEnv EVAL (apply callerEnv) args
     | _ => throw (.str "first item in list is not callable")

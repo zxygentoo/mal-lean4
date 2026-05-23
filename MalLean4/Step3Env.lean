@@ -1,15 +1,21 @@
 import MalLean4.Core
+import MalLean4.Debug
 import MalLean4.Reader
 import MalLean4.Printer
 
 open Types
 
 mutual
-  partial def eval (env : Env) : MalVal → MalIO MalVal
+  partial def eval (env : Env) (ast : MalVal) : MalIO MalVal := do
+    Debug.trace env ast
+    match ast with
     | .list []                    => return .list []
     | .list (.sym "def!" :: rest) => evalDef env rest
     | .list (.sym "let*" :: rest) => evalLet env rest
     | .list (head :: args)        => evalCall head args
+    | .vec  xs                    => do return .vec (← xs.mapM (eval env))
+    | .map  ps                    => do
+      return .map (← ps.mapM fun (k, v) => return (k, ← eval env v))
     | .sym s                      => lookupSym s
     | other                       => return other
   where

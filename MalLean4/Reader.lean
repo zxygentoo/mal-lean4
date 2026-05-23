@@ -7,7 +7,14 @@ namespace Reader
 
 def isSeparator (c : Char) : Bool := " \t\n\r,".contains c
 
-def isSpecial (c : Char) : Bool := "()[]{};\"'`~^@".contains c
+/-- Characters that always tokenize as a single-char token on their own. -/
+def isStandalone (c : Char) : Bool := "()[]{}'`~^@".contains c
+
+/-- Characters that end the current token. Beyond the standalone tokens, the
+tokenizer also handles `;` (comment) and `"` (string literal) before the
+standalone-char branch — they're listed here so `isTokenChar` excludes them. -/
+def isSpecial (c : Char) : Bool :=
+  isStandalone c || c == ';' || c == '"'
 
 def isTokenChar (c : Char) : Bool :=
   !isSeparator c && !isSpecial c
@@ -28,7 +35,7 @@ def readAtom (t : String) : Except String MalVal :=
   | '"' :: rest =>
     match rest.reverse with
     | '"' :: bodyRev => .ok (.str (String.ofList (unescape bodyRev.reverse)))
-    | _ => .error "unterminated string"
+    | _ => .error "unbalanced string: missing closing '\"' before end of input"
   | ':' :: rest => .ok (.kw (String.ofList rest))
   | _ =>
     match t with
@@ -75,7 +82,7 @@ mutual
   partial def readMap (acc : Array (MalVal × MalVal)) :
       List String → Except String (MalVal × List String)
     | []          => .error "unbalanced: expected '}'"
-    | "}" :: rest => .ok (.map acc.toList, rest)
+    | "}" :: rest => .ok (.map (MalVal.dedupMap acc.toList), rest)
     | toks        => do
       let (key, rest)  ← readForm toks
       let (val, rest') ← readForm rest
@@ -87,6 +94,11 @@ mutual
     .ok (.list [.sym name, form], rest)
 end
 
+/-- Read a string literal's body into a token. Returns `(token, rest)`.
+The token always starts with `"`; it ends with a matching `"` for a
+well-formed literal, or with `EOF` (no closing quote) so the parser can
+emit an "unbalanced string" / end-of-input error rather than silently
+accepting a truncated string. -/
 partial def readStringToken (chars : List Char) (acc : List Char) :
     String × List Char :=
   match chars with
@@ -107,8 +119,7 @@ where
     | '~' :: '@' :: rest => "~@" :: go rest
     | c :: rest          =>
       if isSeparator c then go rest
-      else if "()[]{}'`~^@".contains c then
-        String.singleton c :: go rest
+      else if isStandalone c then String.singleton c :: go rest
       else
         let (taken, rest') := (c :: rest).span isTokenChar
         String.ofList taken :: go rest'

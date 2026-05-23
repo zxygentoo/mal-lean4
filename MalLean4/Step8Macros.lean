@@ -1,5 +1,5 @@
 import MalLean4.Core
-import MalLean4.FreeVars
+import MalLean4.Debug
 import MalLean4.Reader
 import MalLean4.Printer
 
@@ -7,11 +7,14 @@ open Types
 
 -- Quasiquote transformation: rewrites a `quasiquote`d form into a tree of
 -- `cons`/`concat` calls that, when evaluated, reconstruct the form with
--- `unquote`/`splice-unquote` substitutions applied.
+-- `unquote`/`splice-unquote` substitutions applied. Vectors are wrapped in
+-- `vec` so they reconstruct as vectors; hash-maps and symbols are quoted.
 mutual
   def quasiquote : MalVal → MalVal
     | .list [.sym "unquote", x] => x
     | .list xs                  => quasiquoteList xs
+    | .vec  xs                  => .list [.sym "vec", quasiquoteList xs]
+    | m@(.map _)                => .list [.sym "quote", m]
     | .sym s                    => .list [.sym "quote", .sym s]
     | other                     => other
 
@@ -26,7 +29,15 @@ end
 
 mutual
   partial def eval (env : Env) : MalVal → MalIO MalVal := fun astIn => do
+    -- Quasiquote is a pure transformation; recurse on the rewritten form
+    -- without a trace so DEBUG-EVAL only shows the result.
+    match astIn with
+    | .list [.sym "quasiquote", arg] => eval env (quasiquote arg)
+    | _ => do
+    -- Macroexpansion is also a transformation: trace fires AFTER expansion
+    -- so DEBUG-EVAL shows the expanded form, not the macro call.
     let ast ← macroexpand env astIn
+    Debug.trace env ast
     match ast with
     | .list []                           => return .list []
     | .list (.sym "def!"        :: rest) => evalDef env rest
@@ -39,6 +50,9 @@ mutual
     | .list (.sym "quasiquote"  :: rest) => evalQuasiquote env rest
     | .list (.sym "macroexpand" :: rest) => evalMacroexpand env rest
     | .list (head :: args)               => evalCall env head args
+    | .vec  xs                           => do return .vec (← xs.mapM (eval env))
+    | .map  ps                           => do
+      return .map (← ps.mapM fun (k, v) => return (k, ← eval env v))
     | .sym s                             => lookupSym env s
     | other                              => return other
 
@@ -58,7 +72,7 @@ mutual
   partial def macroexpand (env : Env) : MalVal → MalIO MalVal := fun ast => do
     match ast with
     | .list (.sym name :: args) =>
-      match ← env.find? name with
+      match (← env.find? name).map MalVal.strip with
       | some (.fn (.lambda lam)) =>
         if lam.isMacro then
           macroexpand env (← apply env (.fn (.lambda lam)) args)
@@ -69,17 +83,26 @@ mutual
 
   partial def apply (callerEnv : Env) (head : MalVal)
       (args : List MalVal) : MalIO MalVal := do
-    match head with
+    match head.strip with
     | .fn (.builtin name) =>
       Core.callBuiltin name callerEnv eval (apply callerEnv) args
     | .fn (.lambda l)     =>
-      if l.params.length ≠ args.length then
-        throw (.str s!"arity mismatch: expected {l.params.length}, got {args.length}")
-      let closureEnv ← callerEnv.new
-      for (k, v) in l.snapshot do
-        closureEnv.set k v
-      for (p, a) in l.params.zip args do
-        closureEnv.set p a
+      let outerEnv ← Env.lookup l.outerId
+      let nParams := l.params.length
+      let closureEnv ← outerEnv.new
+      match l.restParam with
+      | none =>
+        if nParams ≠ args.length then
+          throw (.str s!"arity mismatch: expected {nParams}, got {args.length}")
+        for (p, a) in l.params.zip args do
+          closureEnv.set p a
+      | some restName =>
+        if args.length < nParams then
+          throw (.str s!"arity mismatch: expected at least {nParams}, got {args.length}")
+        let (positional, rest) := (args.take nParams, args.drop nParams)
+        for (p, a) in l.params.zip positional do
+          closureEnv.set p a
+        closureEnv.set restName (.list rest)
       eval closureEnv l.body
     | _ => throw (.str "first item in list is not callable")
 
@@ -136,14 +159,10 @@ mutual
     | [paramsForm, body] => do
       match paramsForm.toList? with
       | some params => do
-        let paramNames ← params.mapM fun
-          | .sym s => return s
-          | _ => throw (.str "fn*: parameter is not a symbol")
-        let frees := FreeVars.unique paramNames body
-        let pairs ← frees.mapM fun name => do
-          return (← env.findLocal? name).map (Prod.mk name)
-        let snapshot := pairs.filterMap id
-        return .fn (.lambda { params := paramNames, body, snapshot })
+        let (paramNames, restParam) ← Core.parseParams params
+        let envId ← Env.register env
+        return .fn (.lambda { params := paramNames, restParam, body,
+                              outerEnvId := envId })
       | none => throw (.str "fn*: expected (fn* (params) body)")
     | _ => throw (.str "fn*: expected (fn* (params) body)")
 
@@ -184,6 +203,8 @@ partial def loop (env : Env) (stdin stdout : IO.FS.Stream) : IO Unit := do
 def main (args : List String) : IO Unit := do
   let env ← Core.initialEnv
   let _ ← rep env "(def! not (fn* (a) (if a false true)))"
+  let _ ← rep env "(def! load-file (fn* (f) (eval (read-string (str \"(do \" (slurp f) \"\nnil)\")))))"
+  let _ ← rep env "(defmacro! cond (fn* (& xs) (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw \"odd number of forms to cond\")) (cons 'cond (rest (rest xs)))))))"
   match args with
   | []           =>
     env.set "*ARGV*" (.list [])

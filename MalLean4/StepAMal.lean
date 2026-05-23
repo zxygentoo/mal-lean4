@@ -1,5 +1,5 @@
 import MalLean4.Core
-import MalLean4.FreeVars
+import MalLean4.Debug
 import MalLean4.Reader
 import MalLean4.Printer
 
@@ -27,21 +27,17 @@ mutual
       | _ => .list [.sym "cons", quasiquote x, rest]
 end
 
-/-- Pull positional + rest parameter names out of a fn* parameter list.
-A literal `&` followed by a single symbol marks the rest binder. -/
-def parseParams : List MalVal → MalIO (List String × Option String)
-  | [] => return ([], none)
-  | .sym "&" :: .sym restName :: [] => return ([], some restName)
-  | .sym "&" :: _ =>
-    throw (.str "fn*: `&` must be followed by a single rest-param symbol")
-  | .sym p :: rest => do
-    let (more, rp) ← parseParams rest
-    return (p :: more, rp)
-  | _ => throw (.str "fn*: parameter is not a symbol")
-
 mutual
   partial def eval (env : Env) : MalVal → MalIO MalVal := fun astIn => do
+    -- Quasiquote is a pure transformation; recurse on the rewritten form
+    -- without a trace so DEBUG-EVAL only shows the result.
+    match astIn with
+    | .list [.sym "quasiquote", arg] => eval env (quasiquote arg)
+    | _ => do
+    -- Macroexpansion is also a transformation: trace fires AFTER expansion
+    -- so DEBUG-EVAL shows the expanded form, not the macro call.
     let ast ← macroexpand env astIn
+    Debug.trace env ast
     match ast with
     | .list []                           => return .list []
     | .list (.sym "def!"        :: rest) => evalDef env rest
@@ -78,7 +74,7 @@ mutual
   partial def macroexpand (env : Env) : MalVal → MalIO MalVal := fun ast => do
     match ast with
     | .list (.sym name :: args) =>
-      match ← env.find? name with
+      match (← env.find? name).map MalVal.strip with
       | some (.fn (.lambda lam)) =>
         if lam.isMacro then
           macroexpand env (← apply env (.fn (.lambda lam)) args)
@@ -89,32 +85,27 @@ mutual
 
   partial def apply (callerEnv : Env) (head : MalVal)
       (args : List MalVal) : MalIO MalVal := do
-    match head with
+    match head.strip with
     | .fn (.builtin name) =>
       Core.callBuiltin name callerEnv eval (apply callerEnv) args
     | .fn (.lambda l)     =>
+      let outerEnv ← Env.lookup l.outerId
       let nParams := l.params.length
+      let closureEnv ← outerEnv.new
       match l.restParam with
       | none =>
         if nParams ≠ args.length then
           throw (.str s!"arity mismatch: expected {nParams}, got {args.length}")
-        let closureEnv ← callerEnv.new
-        for (k, v) in l.snapshot do
-          closureEnv.set k v
         for (p, a) in l.params.zip args do
           closureEnv.set p a
-        eval closureEnv l.body
       | some restName =>
         if args.length < nParams then
           throw (.str s!"arity mismatch: expected at least {nParams}, got {args.length}")
-        let closureEnv ← callerEnv.new
-        for (k, v) in l.snapshot do
-          closureEnv.set k v
         let (positional, rest) := (args.take nParams, args.drop nParams)
         for (p, a) in l.params.zip positional do
           closureEnv.set p a
         closureEnv.set restName (.list rest)
-        eval closureEnv l.body
+      eval closureEnv l.body
     | _ => throw (.str "first item in list is not callable")
 
   partial def evalDef (env : Env) : List MalVal → MalIO MalVal
@@ -170,13 +161,10 @@ mutual
     | [paramsForm, body] => do
       match paramsForm.toList? with
       | some params => do
-        let (paramNames, restParam) ← parseParams params
-        let bound := paramNames ++ restParam.toList
-        let frees := FreeVars.unique bound body
-        let pairs ← frees.mapM fun name => do
-          return (← env.findLocal? name).map (Prod.mk name)
-        let snapshot := pairs.filterMap id
-        return .fn (.lambda { params := paramNames, restParam, body, snapshot })
+        let (paramNames, restParam) ← Core.parseParams params
+        let envId ← Env.register env
+        return .fn (.lambda { params := paramNames, restParam, body,
+                              outerEnvId := envId })
       | none => throw (.str "fn*: expected (fn* (params) body)")
     | _ => throw (.str "fn*: expected (fn* (params) body)")
 
