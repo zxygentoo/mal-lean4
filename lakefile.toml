@@ -8,7 +8,8 @@ defaultTargets = [
     "step4_if_fn_do",
     "step5_tco",
     "step6_file",
-    "step7_quote"
+    "step7_quote",
+    "step8_macros"
 ]
 
 [[lean_lib]]
@@ -46,3 +47,7 @@ root = "MalLean4.Step6File"
 [[lean_exe]]
 name = "step7_quote"
 root = "MalLean4.Step7Quote"
+
+[[lean_exe]]
+name = "step8_macros"
+root = "MalLean4.Step8Macros"

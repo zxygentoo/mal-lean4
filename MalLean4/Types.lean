@@ -31,9 +31,8 @@ of free variables captured at `fn*` time. No `Env` is stored; unresolved
 names defer to the caller's env at apply time. -/
 public structure Lambda where
   public mk ::
-  /-- Parameter names, in positional order. -/
+  public isMacro  : Bool := false
   public params   : List String
-  /-- Unevaluated body form; `apply` evaluates this against the call-time env. -/
   public body     : MalVal
   /-- Free-variable snapshot taken at `fn*` time: `(name, value)` pairs. -/
   public snapshot : List (String × MalVal)

@@ -87,7 +87,7 @@ mutual
       let pairs ← frees.mapM fun name => do
         return (← env.findLocal? name).map (Prod.mk name)
       let snapshot := pairs.filterMap id
-      return .fn (.lambda ⟨paramNames, body, snapshot⟩)
+      return .fn (.lambda { params := paramNames, body, snapshot })
     | _ => throw "fn*: expected (fn* (params) body)"
 end
 

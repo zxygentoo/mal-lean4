@@ -25,27 +25,47 @@ mutual
 end
 
 mutual
-  partial def eval (env : Env) : MalVal → MalIO MalVal
-    | .list []                          => return .list []
-    | .list (.sym "def!"       :: rest) => evalDef env rest
-    | .list (.sym "let*"       :: rest) => evalLet env rest
-    | .list (.sym "do"         :: rest) => evalDo  env rest
-    | .list (.sym "if"         :: rest) => evalIf  env rest
-    | .list (.sym "fn*"        :: rest) => evalFn  env rest
-    | .list (.sym "quote"      :: rest) => evalQuote rest
-    | .list (.sym "quasiquote" :: rest) => evalQuasiquote env rest
-    | .list (head :: args)              => evalCall head args
-    | .sym s                            => lookupSym s
-    | other                             => return other
-  where
-    evalCall (head : MalVal) (args : List MalVal) : MalIO MalVal := do
-      let head' ← eval env head
-      let args' ← args.mapM (eval env)
-      apply env head' args'
-    lookupSym (s : String) : MalIO MalVal := do
-      match ← env.find? s with
-      | some v => return v
-      | none   => throw s!"'{s}' not found"
+  partial def eval (env : Env) : MalVal → MalIO MalVal := fun astIn => do
+    let ast ← macroexpand env astIn
+    match ast with
+    | .list []                           => return .list []
+    | .list (.sym "def!"        :: rest) => evalDef env rest
+    | .list (.sym "defmacro!"   :: rest) => evalDefmacro env rest
+    | .list (.sym "let*"        :: rest) => evalLet env rest
+    | .list (.sym "do"          :: rest) => evalDo  env rest
+    | .list (.sym "if"          :: rest) => evalIf  env rest
+    | .list (.sym "fn*"         :: rest) => evalFn  env rest
+    | .list (.sym "quote"       :: rest) => evalQuote rest
+    | .list (.sym "quasiquote"  :: rest) => evalQuasiquote env rest
+    | .list (.sym "macroexpand" :: rest) => evalMacroexpand env rest
+    | .list (head :: args)               => evalCall env head args
+    | .sym s                             => lookupSym env s
+    | other                              => return other
+
+  partial def evalCall (env : Env) (head : MalVal) (args : List MalVal) :
+      MalIO MalVal := do
+    let head' ← eval env head
+    let args' ← args.mapM (eval env)
+    apply env head' args'
+
+  partial def lookupSym (env : Env) (s : String) : MalIO MalVal := do
+    match ← env.find? s with
+    | some v => return v
+    | none   => throw s!"'{s}' not found"
+
+  /-- Repeatedly expand a macro call until the head no longer resolves to a
+  macro lambda. Non-macro calls and non-list forms pass through unchanged. -/
+  partial def macroexpand (env : Env) : MalVal → MalIO MalVal := fun ast => do
+    match ast with
+    | .list (.sym name :: args) =>
+      match ← env.find? name with
+      | some (.fn (.lambda lam)) =>
+        if lam.isMacro then
+          macroexpand env (← apply env (.fn (.lambda lam)) args)
+        else
+          return ast
+      | _ => return ast
+    | _ => return ast
 
   partial def apply (callerEnv : Env) (head : MalVal)
       (args : List MalVal) : MalIO MalVal := do
@@ -69,6 +89,16 @@ mutual
       env.set name v
       return v
     | _ => throw "def!: expected (def! name expr)"
+
+  partial def evalDefmacro (env : Env) : List MalVal → MalIO MalVal
+    | [.sym name, expr] => do
+      match ← eval env expr with
+      | .fn (.lambda l) =>
+        let macroFn : MalVal := .fn (.lambda { l with isMacro := true })
+        env.set name macroFn
+        return macroFn
+      | _ => throw "defmacro!: value must be a function"
+    | _ => throw "defmacro!: expected (defmacro! name expr)"
 
   partial def evalLet (env : Env) : List MalVal → MalIO MalVal
     | [.list bindings, body] => do
@@ -118,6 +148,10 @@ mutual
   partial def evalQuasiquote (env : Env) : List MalVal → MalIO MalVal
     | [arg] => eval env (quasiquote arg)
     | _ => throw "quasiquote: expected 1 argument"
+
+  partial def evalMacroexpand (env : Env) : List MalVal → MalIO MalVal
+    | [arg] => macroexpand env arg
+    | _ => throw "macroexpand: expected 1 argument"
 end
 
 def READ  (s : String)   : Except String (Option MalVal) := Reader.readStr s
