@@ -7,7 +7,7 @@ namespace Reader
 
 def isSeparator (c : Char) : Bool := " \t\n\r,".contains c
 
-def isSpecial (c : Char) : Bool := "()[];\"'`~".contains c
+def isSpecial (c : Char) : Bool := "()[]{};\"'`~^@".contains c
 
 def isTokenChar (c : Char) : Bool :=
   !isSeparator c && !isSpecial c
@@ -29,6 +29,7 @@ def readAtom (t : String) : Except String MalVal :=
     match rest.reverse with
     | '"' :: bodyRev => .ok (.str (String.ofList (unescape bodyRev.reverse)))
     | _ => .error "unterminated string"
+  | ':' :: rest => .ok (.kw (String.ofList rest))
   | _ =>
     match t with
     | "nil"   => .ok .nil
@@ -42,23 +43,43 @@ def readAtom (t : String) : Except String MalVal :=
 mutual
   partial def readForm : List String → Except String (MalVal × List String)
     | []           => .error "unexpected EOF"
-    | "("  :: rest => readList #[] rest
+    | "("  :: rest => readSeq #[] ")" .list rest
+    | "["  :: rest => readSeq #[] "]" .vec  rest
+    | "{"  :: rest => readMap #[] rest
     | ")"  :: _    => .error "unexpected ')'"
+    | "]"  :: _    => .error "unexpected ']'"
+    | "}"  :: _    => .error "unexpected '}'"
     | "'"  :: rest => quoteMacro "quote"          rest
     | "`"  :: rest => quoteMacro "quasiquote"     rest
     | "~"  :: rest => quoteMacro "unquote"        rest
     | "~@" :: rest => quoteMacro "splice-unquote" rest
+    | "@"  :: rest => quoteMacro "deref"          rest
+    | "^"  :: rest => do
+      let (metaForm, rest')  ← readForm rest
+      let (valueForm, rest'') ← readForm rest'
+      .ok (.list [.sym "with-meta", valueForm, metaForm], rest'')
     | t    :: rest => do
       let atom ← readAtom t
       .ok (atom, rest)
 
-  partial def readList (acc : Array MalVal) :
+  partial def readSeq (acc : Array MalVal) (close : String)
+      (wrap : List MalVal → MalVal) :
       List String → Except String (MalVal × List String)
-    | []           => .error "unbalanced: expected ')'"
-    | ")" :: rest  => .ok (.list acc.toList, rest)
-    | toks         => do
-      let (form, rest) ← readForm toks
-      readList (acc.push form) rest
+    | []          => .error s!"unbalanced: expected '{close}'"
+    | t :: rest   =>
+      if t == close then .ok (wrap acc.toList, rest)
+      else do
+        let (form, rest') ← readForm (t :: rest)
+        readSeq (acc.push form) close wrap rest'
+
+  partial def readMap (acc : Array (MalVal × MalVal)) :
+      List String → Except String (MalVal × List String)
+    | []          => .error "unbalanced: expected '}'"
+    | "}" :: rest => .ok (.map acc.toList, rest)
+    | toks        => do
+      let (key, rest)  ← readForm toks
+      let (val, rest') ← readForm rest
+      readMap (acc.push (key, val)) rest'
 
   partial def quoteMacro (name : String) (toks : List String) :
       Except String (MalVal × List String) := do
@@ -86,9 +107,7 @@ where
     | '~' :: '@' :: rest => "~@" :: go rest
     | c :: rest          =>
       if isSeparator c then go rest
-      else if c == '(' || c == '[' then "(" :: go rest
-      else if c == ')' || c == ']' then ")" :: go rest
-      else if c == '\'' || c == '`' || c == '~' then
+      else if "()[]{}'`~^@".contains c then
         String.singleton c :: go rest
       else
         let (taken, rest') := (c :: rest).span isTokenChar

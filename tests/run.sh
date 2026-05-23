@@ -26,6 +26,7 @@ declare -A STEP_OPTS=(
   [step7_quote]="--no-deferrable --no-optional"
   [step8_macros]="--no-deferrable --no-optional"
   [step9_try]="--no-deferrable --no-optional"
+  [stepA_mal]="--no-deferrable --no-optional"
 )
 
 normalize() {
@@ -46,7 +47,16 @@ run_one() {
   local extra="${STEP_OPTS[$step]}"
   echo "=== $step (opts: ${extra:-none}) ==="
   lake build "$step" >/dev/null
-  python3 -W ignore::SyntaxWarning tests/runtest.py $extra "$@" "tests/${step}.mal" -- "$(pwd)/.lake/build/bin/$step"
+  if [[ "$step" == "stepA_mal" ]]; then
+    # stepA's upstream test fixture loads `../tests/computations.mal`,
+    # assuming the binary runs from `impls/<lang>/`. Spawn from `MalLean4/`
+    # so that relative path resolves to our top-level `tests/`.
+    ( cd MalLean4 && python3 -W ignore::SyntaxWarning ../tests/runtest.py \
+        $extra "$@" "../tests/${step}.mal" -- "../.lake/build/bin/$step" )
+  else
+    python3 -W ignore::SyntaxWarning tests/runtest.py \
+      $extra "$@" "tests/${step}.mal" -- "$(pwd)/.lake/build/bin/$step"
+  fi
 }
 
 if [[ $# -eq 0 ]]; then

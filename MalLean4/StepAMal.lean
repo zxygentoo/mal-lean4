@@ -7,11 +7,14 @@ open Types
 
 -- Quasiquote transformation: rewrites a `quasiquote`d form into a tree of
 -- `cons`/`concat` calls that, when evaluated, reconstruct the form with
--- `unquote`/`splice-unquote` substitutions applied.
+-- `unquote`/`splice-unquote` substitutions applied. Vectors are wrapped in
+-- `vec` so they reconstruct as vectors; hash-maps and symbols are quoted.
 mutual
   def quasiquote : MalVal → MalVal
     | .list [.sym "unquote", x] => x
     | .list xs                  => quasiquoteList xs
+    | .vec  xs                  => .list [.sym "vec", quasiquoteList xs]
+    | m@(.map _)                => .list [.sym "quote", m]
     | .sym s                    => .list [.sym "quote", .sym s]
     | other                     => other
 
@@ -23,6 +26,18 @@ mutual
       | .list [.sym "splice-unquote", y] => .list [.sym "concat", y, rest]
       | _ => .list [.sym "cons", quasiquote x, rest]
 end
+
+/-- Pull positional + rest parameter names out of a fn* parameter list.
+A literal `&` followed by a single symbol marks the rest binder. -/
+def parseParams : List MalVal → MalIO (List String × Option String)
+  | [] => return ([], none)
+  | .sym "&" :: .sym restName :: [] => return ([], some restName)
+  | .sym "&" :: _ =>
+    throw (.str "fn*: `&` must be followed by a single rest-param symbol")
+  | .sym p :: rest => do
+    let (more, rp) ← parseParams rest
+    return (p :: more, rp)
+  | _ => throw (.str "fn*: parameter is not a symbol")
 
 mutual
   partial def eval (env : Env) : MalVal → MalIO MalVal := fun astIn => do
@@ -38,7 +53,14 @@ mutual
     | .list (.sym "quote"       :: rest) => evalQuote rest
     | .list (.sym "quasiquote"  :: rest) => evalQuasiquote env rest
     | .list (.sym "macroexpand" :: rest) => evalMacroexpand env rest
+    | .list (.sym "try*"        :: rest) => evalTry env rest
     | .list (head :: args)               => evalCall env head args
+    | .vec  xs                           => do
+      let ys ← xs.mapM (eval env)
+      return .vec ys
+    | .map  pairs                        => do
+      let ys ← pairs.mapM fun (k, v) => do return (k, ← eval env v)
+      return .map ys
     | .sym s                             => lookupSym env s
     | other                              => return other
 
@@ -53,8 +75,6 @@ mutual
     | some v => return v
     | none   => throw (.str s!"'{s}' not found")
 
-  /-- Repeatedly expand a macro call until the head no longer resolves to a
-  macro lambda. Non-macro calls and non-list forms pass through unchanged. -/
   partial def macroexpand (env : Env) : MalVal → MalIO MalVal := fun ast => do
     match ast with
     | .list (.sym name :: args) =>
@@ -73,14 +93,28 @@ mutual
     | .fn (.builtin name) =>
       Core.callBuiltin name callerEnv eval (apply callerEnv) args
     | .fn (.lambda l)     =>
-      if l.params.length ≠ args.length then
-        throw (.str s!"arity mismatch: expected {l.params.length}, got {args.length}")
-      let closureEnv ← callerEnv.new
-      for (k, v) in l.snapshot do
-        closureEnv.set k v
-      for (p, a) in l.params.zip args do
-        closureEnv.set p a
-      eval closureEnv l.body
+      let nParams := l.params.length
+      match l.restParam with
+      | none =>
+        if nParams ≠ args.length then
+          throw (.str s!"arity mismatch: expected {nParams}, got {args.length}")
+        let closureEnv ← callerEnv.new
+        for (k, v) in l.snapshot do
+          closureEnv.set k v
+        for (p, a) in l.params.zip args do
+          closureEnv.set p a
+        eval closureEnv l.body
+      | some restName =>
+        if args.length < nParams then
+          throw (.str s!"arity mismatch: expected at least {nParams}, got {args.length}")
+        let closureEnv ← callerEnv.new
+        for (k, v) in l.snapshot do
+          closureEnv.set k v
+        let (positional, rest) := (args.take nParams, args.drop nParams)
+        for (p, a) in l.params.zip positional do
+          closureEnv.set p a
+        closureEnv.set restName (.list rest)
+        eval closureEnv l.body
     | _ => throw (.str "first item in list is not callable")
 
   partial def evalDef (env : Env) : List MalVal → MalIO MalVal
@@ -107,7 +141,7 @@ mutual
         let letEnv ← env.new
         bindLet letEnv bs
         eval letEnv body
-      | none => throw (.str "let*: expected (let* (bindings) body)")
+      | none    => throw (.str "let*: expected (let* (bindings) body)")
     | _ => throw (.str "let*: expected (let* (bindings) body)")
 
   partial def bindLet (env : Env) : List MalVal → MalIO Unit
@@ -136,14 +170,13 @@ mutual
     | [paramsForm, body] => do
       match paramsForm.toList? with
       | some params => do
-        let paramNames ← params.mapM fun
-          | .sym s => return s
-          | _ => throw (.str "fn*: parameter is not a symbol")
-        let frees := FreeVars.unique paramNames body
+        let (paramNames, restParam) ← parseParams params
+        let bound := paramNames ++ restParam.toList
+        let frees := FreeVars.unique bound body
         let pairs ← frees.mapM fun name => do
           return (← env.findLocal? name).map (Prod.mk name)
         let snapshot := pairs.filterMap id
-        return .fn (.lambda { params := paramNames, body, snapshot })
+        return .fn (.lambda { params := paramNames, restParam, body, snapshot })
       | none => throw (.str "fn*: expected (fn* (params) body)")
     | _ => throw (.str "fn*: expected (fn* (params) body)")
 
@@ -158,6 +191,15 @@ mutual
   partial def evalMacroexpand (env : Env) : List MalVal → MalIO MalVal
     | [arg] => macroexpand env arg
     | _ => throw (.str "macroexpand: expected 1 argument")
+
+  partial def evalTry (env : Env) : List MalVal → MalIO MalVal
+    | [tryExpr] => eval env tryExpr
+    | [tryExpr, .list [.sym "catch*", .sym binding, handler]] =>
+      tryCatch (eval env tryExpr) fun thrown => do
+        let catchEnv ← env.new
+        catchEnv.set binding thrown
+        eval catchEnv handler
+    | _ => throw (.str "try*: expected (try* expr (catch* sym handler))")
 end
 
 def READ  (s : String)   : Except String (Option MalVal) := Reader.readStr s
@@ -184,9 +226,13 @@ partial def loop (env : Env) (stdin stdout : IO.FS.Stream) : IO Unit := do
 def main (args : List String) : IO Unit := do
   let env ← Core.initialEnv
   let _ ← rep env "(def! not (fn* (a) (if a false true)))"
+  let _ ← rep env "(def! load-file (fn* (f) (eval (read-string (str \"(do \" (slurp f) \"\nnil)\")))))"
+  let _ ← rep env "(defmacro! cond (fn* (& xs) (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw \"odd number of forms to cond\")) (cons 'cond (rest (rest xs)))))))"
+  let _ ← rep env "(def! *host-language* \"lean4\")"
   match args with
   | []           =>
     env.set "*ARGV*" (.list [])
+    let _ ← rep env "(println (str \"Mal [\" *host-language* \"]\"))"
     let stdin  ← IO.getStdin
     let stdout ← IO.getStdout
     loop env stdin stdout

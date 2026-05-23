@@ -28,10 +28,20 @@ partial def prStrAux (readably : Bool) : MalVal → IO String
   | .bool false  => return "false"
   | .int n       => return (toString n)
   | .sym s       => return s
+  | .kw s        => return s!":{s}"
   | .str s       => return (if readably then "\"" ++ escapeStr s ++ "\"" else s)
   | .list xs     => do
     let strs ← xs.mapM (prStrAux readably)
     return "(" ++ " ".intercalate strs ++ ")"
+  | .vec xs      => do
+    let strs ← xs.mapM (prStrAux readably)
+    return "[" ++ " ".intercalate strs ++ "]"
+  | .map pairs   => do
+    let parts ← pairs.mapM fun (k, v) => do
+      let ks ← prStrAux readably k
+      let vs ← prStrAux readably v
+      return s!"{ks} {vs}"
+    return "{" ++ " ".intercalate parts ++ "}"
   | .fn _        => return "#<fn>"
   | .atom n      => do
     match ← Atoms.deref n with

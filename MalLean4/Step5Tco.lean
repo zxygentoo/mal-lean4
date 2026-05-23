@@ -50,10 +50,13 @@ mutual
     | _ => throw (.str "def!: expected (def! name expr)")
 
   partial def evalLet (env : Env) : List MalVal → MalIO MalVal
-    | [.list bindings, body] => do
-      let letEnv ← env.new
-      bindLet letEnv bindings
-      eval letEnv body
+    | [bindings, body] => do
+      match bindings.toList? with
+      | some bs => do
+        let letEnv ← env.new
+        bindLet letEnv bs
+        eval letEnv body
+      | none => throw (.str "let*: expected (let* (bindings) body)")
     | _ => throw (.str "let*: expected (let* (bindings) body)")
 
   partial def bindLet (env : Env) : List MalVal → MalIO Unit
@@ -79,15 +82,18 @@ mutual
     | _ => throw (.str "if: expected (if pred then) or (if pred then else)")
 
   partial def evalFn (env : Env) : List MalVal → MalIO MalVal
-    | [.list params, body] => do
-      let paramNames ← params.mapM fun
-        | .sym s => return s
-        | _ => throw (.str "fn*: parameter is not a symbol")
-      let frees := FreeVars.unique paramNames body
-      let pairs ← frees.mapM fun name => do
-        return (← env.findLocal? name).map (Prod.mk name)
-      let snapshot := pairs.filterMap id
-      return .fn (.lambda { params := paramNames, body, snapshot })
+    | [paramsForm, body] => do
+      match paramsForm.toList? with
+      | some params => do
+        let paramNames ← params.mapM fun
+          | .sym s => return s
+          | _ => throw (.str "fn*: parameter is not a symbol")
+        let frees := FreeVars.unique paramNames body
+        let pairs ← frees.mapM fun name => do
+          return (← env.findLocal? name).map (Prod.mk name)
+        let snapshot := pairs.filterMap id
+        return .fn (.lambda { params := paramNames, body, snapshot })
+      | none => throw (.str "fn*: expected (fn* (params) body)")
     | _ => throw (.str "fn*: expected (fn* (params) body)")
 end
 

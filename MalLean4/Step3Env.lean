@@ -37,10 +37,13 @@ mutual
     | _ => throw (.str "def!: expected (def! name expr)")
 
   partial def evalLet (env : Env) : List MalVal → MalIO MalVal
-    | [.list bindings, body] => do
-      let letEnv ← env.new
-      bindLet letEnv bindings
-      eval letEnv body
+    | [bindings, body] => do
+      match bindings.toList? with
+      | some bs => do
+        let letEnv ← env.new
+        bindLet letEnv bs
+        eval letEnv body
+      | none => throw (.str "let*: expected (let* (bindings) body)")
     | _ => throw (.str "let*: expected (let* (bindings) body)")
 
   partial def bindLet (env : Env) : List MalVal → MalIO Unit
