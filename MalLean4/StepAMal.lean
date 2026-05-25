@@ -46,14 +46,25 @@ mutual
   /-- Pushes an `IO.Ref Env` onto `GC.roots` so a sweep fired by a deeper
   frame walks this frame's *current* env. The ref is re-synced only when
   a tail-position form rebinds `env` (`let*` body, lambda apply) — every
-  other iteration leaves it alone. -/
+  other iteration leaves it alone. Leaf forms (literals, sym lookup,
+  empty list) short-circuit before the setup — they don't recurse, so
+  no GC root is needed. -/
   partial def eval (env₀ : Env) (ast₀ : MalVal) : MalIO MalVal := do
-    let envRef ← IO.mkRef env₀
-    GC.roots.modify (envRef :: ·)
-    let result ← tryCatch (evalLoop envRef ast₀)
-      fun e => do GC.roots.modify (·.tail!); throw e
-    GC.roots.modify (·.tail!)
-    return result
+    match ast₀ with
+    | .nil | .bool _ | .int _ | .str _ | .kw _ | .fn _ | .atom _ =>
+      return ast₀
+    | .sym s =>
+      match ← env₀.find? s with
+      | some v => return v
+      | none   => throw (.str s!"'{s}' not found")
+    | .list [] => return .list []
+    | _ =>
+      let envRef ← IO.mkRef env₀
+      GC.roots.modify (envRef :: ·)
+      let result ← tryCatch (evalLoop envRef ast₀)
+        fun e => do GC.roots.modify (·.tail!); throw e
+      GC.roots.modify (·.tail!)
+      return result
 
   partial def evalLoop (envRef : IO.Ref Env) (ast₀ : MalVal) : MalIO MalVal := do
     let mut env ← envRef.get
