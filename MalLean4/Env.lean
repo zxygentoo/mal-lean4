@@ -7,10 +7,14 @@ open Types
 
 /-- A mal evaluation environment: a chain of frames, each holding a mutable
 `HashMap` of bindings. `def!` updates the innermost frame in place via the
-`IO.Ref`. -/
+`IO.Ref`. `idRef` is set to `some n` once the env is `register`-ed (so
+`GC.markEnv` can mark `n` as reachable when it walks the env); transient
+envs created by `Env.new` and never captured by a `fn*` keep it as
+`none`. -/
 public structure Env where
   current : IO.Ref (Std.HashMap String MalVal)
   outer   : Option Env
+  idRef   : IO.Ref (Option Nat)
 
 namespace Env
 
@@ -26,12 +30,16 @@ a `Nat` read + compare; nothing reads the bigger `store` array unless we
 actually sweep. -/
 public initialize sinceLastSweep : IO.Ref Nat ← IO.mkRef 0
 
-/-- Stash `env` in the registry and return its handle. -/
+/-- Stash `env` in the registry and return its handle. Also writes the
+assigned id into `env.idRef` so `GC.markEnv` can mark the slot reachable
+when it walks `env` (or any env that chains to it). -/
 public def register (env : Env) : IO Nat := do
   let arr ← store.get
+  let id := arr.size
+  env.idRef.set (some id)
   store.set (arr.push (some env))
   sinceLastSweep.modify (· + 1)
-  return arr.size
+  return id
 
 /-- Look up the env at `id`. Panics if the id was either never registered
 or was swept by `GC.run`; reaching either case means a `Lambda` outlived a
@@ -46,13 +54,15 @@ public partial def lookup (id : Nat) : IO Env := do
 /-- A root environment with no bindings. -/
 public def empty : IO Env := do
   let r ← IO.mkRef ∅
-  return { current := r, outer := none }
+  let i ← IO.mkRef none
+  return { current := r, outer := none, idRef := i }
 
 /-- A new nested env whose lookups fall through to `parent`. Called at
 every `let*` and lambda apply to introduce a fresh binding frame. -/
 public def new (parent : Env) : IO Env := do
   let r ← IO.mkRef ∅
-  return { current := r, outer := some parent }
+  let i ← IO.mkRef none
+  return { current := r, outer := some parent, idRef := i }
 
 /-- Bind `k` to `v` in the innermost frame (shadows any outer binding). -/
 public def set (env : Env) (k : String) (v : MalVal) : IO Unit :=

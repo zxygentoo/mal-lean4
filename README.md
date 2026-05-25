@@ -63,14 +63,28 @@ All 863 step tests pass — required, deferrable, and optional:
 
 The upstream library tests (`tests/lib/*.mal`) also pass: 168 / 169
 against `stepA_mal`. The single failure is `memoize.mal`, which runs
-naïve `(fib 32)` — exponential without TCO, our recursive eval just times
-out.
+naïve `(fib 32)` (~5M calls, exponential — TCO doesn't help shape, just
+depth). Our interpreter is fast enough to handle ~1M iterations in 7.5s,
+so fib(32) needs roughly 40s and times out at the harness limit.
 
-Step5's "TCO" is not real TCO — the recursive interpreter relies on
-Lean's compiler turning monadic tail calls into jumps, which is sufficient
-for the native step tests. A naive self-hosting smoke test works
-(`stepA_mal stepA_mal.mal` from the upstream `impls/mal/`); deep recursion
-under self-host is impractically slow because the mal-in-mal eval loop
-isn't constant-stack at the Lean level.
+`stepA_mal` has real TCO — `eval` is a `while true` loop with mutable
+`env`/`ast`; tail-position forms (`let*` body, `do` last, `if` branch,
+lambda application body, `quasiquote` rewrite, bare `try*`) update the
+locals and continue. Native deep tail recursion runs 10M-deep without
+stack growth; self-host (`stepA_mal stepA_mal.mal` from upstream
+`impls/mal/`) runs ~10k user-level recursions in seconds and ~50k in a
+few minutes — bounded by interpretation throughput, not stack. Step5–9
+still use recursive eval (Lean's compiler optimizes monadic tail calls
+well enough for their native test cases); propagating the loop shape
+back is mechanical follow-up.
+
+## Follow-ups
+
+- **Self-host throughput.** ~5 ms per mal-level iteration through
+  mal-in-mal. Most of that is mal-in-mal's `EVAL` doing dispatch in mal,
+  not host overhead. Compile-time macros (`(def! and ^{:inline? true}
+  and)` etc.) and a faster builtin-lookup path would help.
+- **Propagate TCO to step5–9.** Mechanical translation of stepA's loop
+  shape.
 
 See [AGENTS.md](AGENTS.md) for project conventions.

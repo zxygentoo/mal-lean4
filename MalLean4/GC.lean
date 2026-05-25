@@ -20,6 +20,13 @@ open Types
 
 namespace GC
 
+/-- Stack of envs the host eval recursion is currently working with. Each
+recursive `eval` entry pushes a fresh `IO.Ref Env`, updates it as its
+mutable `env` changes, and pops on return. `GC.run` walks every env in
+this stack so closures sitting in an outer frame's `letEnv` (or any other
+non-current env) survive sweeps fired by a deeper frame's `evalDo`. -/
+public initialize roots : IO.Ref (List (IO.Ref Env)) ← IO.mkRef []
+
 structure Marks where
   envs  : Std.HashSet Nat := ∅
   atoms : Std.HashSet Nat := ∅
@@ -48,6 +55,12 @@ mutual
     | _ => pure ()
 
   partial def markEnv (marks : IO.Ref Marks) (env : Env) : IO Unit := do
+    -- If this env is registered, mark its slot so it survives the sweep
+    -- even when its only outside reference is a lambda on the host stack.
+    if let some id ← env.idRef.get then
+      let m ← marks.get
+      if !m.envs.contains id then
+        marks.set { m with envs := m.envs.insert id }
     let bindings ← env.current.get
     for (_, v) in bindings.toList do
       markVal marks v
@@ -65,6 +78,10 @@ would collect intermediates still in use. -/
 public def run (root : Env) : IO Unit := do
   let marks ← IO.mkRef ({} : Marks)
   markEnv marks root
+  -- Walk every active eval frame's current env too — otherwise a sweep
+  -- fired by a deep frame would free envs the outer frames still need.
+  for envRef in (← roots.get) do
+    markEnv marks (← envRef.get)
   let m ← marks.get
   let envArr ← Env.store.get
   Env.store.set (envArr.mapIdx fun i e =>

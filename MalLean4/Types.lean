@@ -135,6 +135,11 @@ public def Lambda.isMacro? (l : Lambda) : Bool := l.isMacro
 /-- Public accessor: id of the env captured at `fn*` time. -/
 public def Lambda.outerId (l : Lambda) : Nat := l.outerEnvId
 
+/-- A default `MalVal` so partial list operations (`getLast!`, `head!`) can
+type-check. The contents are irrelevant — these operations are only called
+on lists we've already checked to be non-empty. -/
+public instance : Inhabited MalVal := ⟨.nil⟩
+
 /-- Deduplicate hash-map entries, last-write-wins. Used to keep map literals
 and `hash-map`/`assoc` results free of duplicate keys. -/
 public def MalVal.dedupMap (pairs : List (MalVal × MalVal)) :
