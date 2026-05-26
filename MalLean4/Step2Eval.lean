@@ -1,34 +1,46 @@
 import MalLean4.Core
-import MalLean4.Fn
 import MalLean4.Reader
 import MalLean4.Printer
 
 open Types
 
-partial def EVAL (env : Env) : MalVal → MalIO MalVal
-  | .list []             => return .list []
-  | .list (head :: args) => do
-    let head' ← EVAL env head
-    let args' ← args.mapM (EVAL env)
-    match head' with
-    | .fn f => f.apply args'
-    | _     => throw "first item in list is not callable"
-  | .sym s => do
-    match ← env.find? s with
-    | some v => return v
-    | none   => throw s!"'{s}' not found"
-  | other  => return other
+mutual
+  partial def EVAL (env : Env) : MalVal → MalIO MalVal
+    | .list []             => return .list []
+    | .list (head :: args) => evalCall head args
+    | .vec  xs             => do return .vec (← xs.mapM (EVAL env))
+    | .map  ps             => do
+      return .map (← ps.mapM fun (k, v) => return (k, ← EVAL env v))
+    | .sym s               => lookupSym s
+    | other                => return other
+  where
+    evalCall (head : MalVal) (args : List MalVal) : MalIO MalVal := do
+      let head' ← EVAL env head
+      let args' ← args.mapM (EVAL env)
+      apply env head' args'
+    lookupSym (s : String) : MalIO MalVal := do
+      match ← env.find? s with
+      | some v => return v
+      | none   => throw (.str s!"'{s}' not found")
+
+  partial def apply (callerEnv : Env) (head : MalVal)
+      (args : List MalVal) : MalIO MalVal := do
+    match head.strip with
+    | .fn (.builtin name) =>
+      Core.callBuiltin name callerEnv EVAL (apply callerEnv) args
+    | _ => throw (.str "first item in list is not callable")
+end
 
 def READ  (s : String)   : Except String (Option MalVal) := Reader.readStr s
-def PRINT (ast : MalVal) : String                        := Printer.prStr ast
+def PRINT (ast : MalVal) : IO String                     := Printer.prStr ast
 
 def rep (env : Env) (s : String) : IO (Option String) := do
   match READ s with
   | .ok none       => return none
   | .ok (some ast) =>
-    match ← (EVAL env ast).run with
-    | .ok v    => return some (PRINT v)
-    | .error e => return some s!"Error: {e}"
+    match ← (EVAL env ast).toBaseIO with
+    | .ok v    => return some (← PRINT v)
+    | .error e => return some s!"Error: {← Printer.prStr e}"
   | .error e       => return some s!"Error: {e}"
 
 partial def loop (env : Env) (stdin stdout : IO.FS.Stream) : IO Unit := do

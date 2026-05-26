@@ -6,22 +6,51 @@ import MalLean4.Printer
 
 open Types
 
+-- Quasiquote transformation: rewrites a `quasiquote`d form into a tree of
+-- `cons`/`concat` calls that, when evaluated, reconstruct the form with
+-- `unquote`/`splice-unquote` substitutions applied. Vectors are wrapped in
+-- `vec` so they reconstruct as vectors; hash-maps and symbols are quoted.
+mutual
+  def quasiquote : MalVal → MalVal
+    | .list [.sym "unquote", x] => x
+    | .list xs                  => quasiquoteList xs
+    | .vec  xs                  => .list [.sym "vec", quasiquoteList xs]
+    | m@(.map _)                => .list [.sym "quote", m]
+    | .sym s                    => .list [.sym "quote", .sym s]
+    | other                     => other
+
+  def quasiquoteList : List MalVal → MalVal
+    | []      => .list []
+    | x :: xs =>
+      let rest := quasiquoteList xs
+      match x with
+      | .list [.sym "splice-unquote", y] => .list [.sym "concat", y, rest]
+      | _ => .list [.sym "cons", quasiquote x, rest]
+end
+
 mutual
   partial def eval (env : Env) (ast : MalVal) : MalIO MalVal := do
+    -- Quasiquote is a pure AST transformation; recurse on the rewritten
+    -- form without a trace so DEBUG-EVAL shows only the result.
+    match ast with
+    | .list [.sym "quasiquote", arg] => eval env (quasiquote arg)
+    | _ => do
     Debug.trace env ast
     match ast with
-    | .list []                    => return .list []
-    | .list (.sym "def!" :: rest) => evalDef env rest
-    | .list (.sym "let*" :: rest) => evalLet env rest
-    | .list (.sym "do"   :: rest) => evalDo  env rest
-    | .list (.sym "if"   :: rest) => evalIf  env rest
-    | .list (.sym "fn*"  :: rest) => evalFn  env rest
-    | .list (head :: args)        => evalCall head args
-    | .vec  xs                    => do return .vec (← xs.mapM (eval env))
-    | .map  ps                    => do
+    | .list []                          => return .list []
+    | .list (.sym "def!"       :: rest) => evalDef env rest
+    | .list (.sym "let*"       :: rest) => evalLet env rest
+    | .list (.sym "do"         :: rest) => evalDo  env rest
+    | .list (.sym "if"         :: rest) => evalIf  env rest
+    | .list (.sym "fn*"        :: rest) => evalFn  env rest
+    | .list (.sym "quote"      :: rest) => evalQuote rest
+    | .list (.sym "quasiquote" :: rest) => evalQuasiquote env rest
+    | .list (head :: args)              => evalCall head args
+    | .vec  xs                          => do return .vec (← xs.mapM (eval env))
+    | .map  ps                          => do
       return .map (← ps.mapM fun (k, v) => return (k, ← eval env v))
-    | .sym s                      => lookupSym s
-    | other                       => return other
+    | .sym s                            => lookupSym s
+    | other                             => return other
   where
     evalCall (head : MalVal) (args : List MalVal) : MalIO MalVal := do
       let head' ← eval env head
@@ -87,9 +116,6 @@ mutual
     | [last]  => eval env last
     | x :: xs => do
       let _ ← eval env x
-      -- Between sequenced forms is a host-eval-safe GC point: the previous
-      -- result was discarded, remaining `xs` are AST (no closures), and
-      -- walking `env` catches everything still live.
       GC.maybeRun env
       evalDo env xs
 
@@ -110,6 +136,14 @@ mutual
                               outerEnvId := envId })
       | none => throw (.str "fn*: expected (fn* (params) body)")
     | _ => throw (.str "fn*: expected (fn* (params) body)")
+
+  partial def evalQuote : List MalVal → MalIO MalVal
+    | [arg] => return arg
+    | _ => throw (.str "quote: expected 1 argument")
+
+  partial def evalQuasiquote (env : Env) : List MalVal → MalIO MalVal
+    | [arg] => eval env (quasiquote arg)
+    | _ => throw (.str "quasiquote: expected 1 argument")
 end
 
 def READ  (s : String)   : Except String (Option MalVal) := Reader.readStr s
@@ -134,9 +168,17 @@ partial def loop (env : Env) (stdin stdout : IO.FS.Stream) : IO Unit := do
   GC.maybeRun env
   loop env stdin stdout
 
-def main : IO Unit := do
+def main (args : List String) : IO Unit := do
   let env ← Core.initialEnv
   let _ ← rep env "(def! not (fn* (a) (if a false true)))"
-  let stdin  ← IO.getStdin
-  let stdout ← IO.getStdout
-  loop env stdin stdout
+  match args with
+  | []           =>
+    env.set "*ARGV*" (.list [])
+    let stdin  ← IO.getStdin
+    let stdout ← IO.getStdout
+    loop env stdin stdout
+  | file :: rest =>
+    let argv : List MalVal := rest.map MalVal.str
+    env.set "*ARGV*" (.list argv)
+    let _ ← rep env s!"(load-file \"{file}\")"
+    return

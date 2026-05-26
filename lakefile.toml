@@ -1,10 +1,21 @@
 name = "mal-lean4"
 version = "0.1.0"
-defaultTargets = ["step0_repl", "step1_read_print", "step2_eval", "step3_env", "step4_if_fn_do"]
+defaultTargets = [
+    "step0_repl",
+    "step1_read_print",
+    "step2_eval",
+    "step3_env",
+    "step4_if_fn_do",
+    "step5_tco",
+    "step6_file",
+    "step7_quote",
+    "step8_macros",
+    "step9_try",
+    "stepA_mal"
+]
 
 [[lean_lib]]
 name = "MalLean4"
-leanOptions = [{ name = "linter.missingDocs", value = true }]
 
 [[lean_exe]]
 name = "step0_repl"
@@ -25,3 +36,27 @@ root = "MalLean4.Step3Env"
 [[lean_exe]]
 name = "step4_if_fn_do"
 root = "MalLean4.Step4IfFnDo"
+
+[[lean_exe]]
+name = "step5_tco"
+root = "MalLean4.Step5Tco"
+
+[[lean_exe]]
+name = "step6_file"
+root = "MalLean4.Step6File"
+
+[[lean_exe]]
+name = "step7_quote"
+root = "MalLean4.Step7Quote"
+
+[[lean_exe]]
+name = "step8_macros"
+root = "MalLean4.Step8Macros"
+
+[[lean_exe]]
+name = "step9_try"
+root = "MalLean4.Step9Try"
+
+[[lean_exe]]
+name = "stepA_mal"
+root = "MalLean4.StepAMal"

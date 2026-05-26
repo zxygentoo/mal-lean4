@@ -3,44 +3,123 @@ module
 public import MalLean4.Types
 public import Std.Data.HashMap.Basic
 
+set_option linter.missingDocs true
+
 open Types
 
-/-- The mal evaluation environment: a chain of frames mapping symbol names
-to their bound values.
-
-The innermost frame is mutable (an `IO.Ref` to a `Std.HashMap`); the outer
-pointer is plain and never changes. Mutation is required so that closures
-which capture an env later observe `def!`s into that env — see step 4 of
-the mal guide.
--/
+/-- A mal evaluation environment: a chain of frames, each holding a mutable
+`HashMap` of bindings. `def!` updates the innermost frame in place via the
+`IO.Ref`. `idRef` is set to `some n` once the env is `register`-ed (so
+`GC.markEnv` can mark `n` as reachable when it walks the env); transient
+envs created by `Env.new` and never captured by a `fn*` keep it as
+`none`. -/
 public structure Env where
+  /-- Bindings local to this frame. -/
   current : IO.Ref (Std.HashMap String MalVal)
+  /-- Parent frame; `none` for the root. -/
   outer   : Option Env
+  /-- Registration id if a closure has captured this env. -/
+  idRef   : IO.Ref (Option Nat)
 
 namespace Env
 
-/-- A fresh root environment with no bindings. -/
+/-- Backing store for env handles. `Lambda.outerEnvId` indexes into this
+table so the env reference doesn't appear directly inside `MalVal` (which
+would break strict positivity, same shape as `Atoms.store`). Entries
+become `none` after `GC.run` collects them. -/
+public initialize store : IO.Ref (Array (Option Env)) ← IO.mkRef #[]
+
+/-- `store.size` at the most recent sweep. -/
+public initialize lastSweepSize : IO.Ref Nat ← IO.mkRef 0
+
+/-- Set to `true` when `register` notices we've accumulated more than
+`threshold` new entries since `lastSweepSize`; cleared after `GC.run`.
+`maybeRun`'s hot path is just a `Bool` read. -/
+public initialize shouldSweep : IO.Ref Bool ← IO.mkRef false
+
+/-- Number of new `store` entries between automatic sweeps. -/
+public def threshold : Nat := 1000
+
+/-- One-way flag: set to `true` by `Env.set` / `Env.newWithBindings` when
+they bind `DEBUG-EVAL` in any frame. While `false`, `Debug.trace` skips
+the env-chain walk entirely — saving an O(depth) lookup on every
+`evalLoop` iteration in benchmark code that never touches the trace
+hook. Never cleared: once set, the env walk takes over and correctly
+returns `none` for the not-currently-bound case (an out-of-scope
+`DEBUG-EVAL` binding). -/
+public initialize debugEvalMaybeBound : IO.Ref Bool ← IO.mkRef false
+
+/-- Stash `env` in the registry and return its handle. Also writes the
+assigned id into `env.idRef` so `GC.markEnv` can mark the slot reachable
+when it walks `env` (or any env that chains to it). The post-push
+delta-vs-`lastSweepSize` check sets `shouldSweep` once per cycle; most
+registrations are a read + compare, no write. -/
+public def register (env : Env) : IO Nat := do
+  let arr ← store.get
+  let id := arr.size
+  env.idRef.set (some id)
+  store.set (arr.push (some env))
+  if id + 1 - (← lastSweepSize.get) > threshold then
+    shouldSweep.set true
+  return id
+
+/-- Look up the env at `id`. Panics if the id was either never registered
+or was swept by `GC.run`; reaching either case means a `Lambda` outlived a
+reference the GC didn't see, which is a bug. -/
+public partial def lookup (id : Nat) : IO Env := do
+  let arr ← store.get
+  match arr[id]? with
+  | some (some env) => return env
+  | some none       => panic! s!"Env.lookup: id {id} was garbage collected"
+  | none            => panic! s!"Env.lookup: invalid id {id} (table size {arr.size})"
+
+/-- A root environment with no bindings. -/
 public def empty : IO Env := do
   let r ← IO.mkRef ∅
-  return { current := r, outer := none }
+  let i ← IO.mkRef none
+  return { current := r, outer := none, idRef := i }
 
-/-- A fresh child env whose lookups fall through to `parent` on miss. -/
-public def child (parent : Env) : IO Env := do
+/-- A new nested env whose lookups fall through to `parent`. Called at
+every `let*` and lambda apply to introduce a fresh binding frame. -/
+public def new (parent : Env) : IO Env := do
   let r ← IO.mkRef ∅
-  return { current := r, outer := some parent }
+  let i ← IO.mkRef none
+  return { current := r, outer := some parent, idRef := i }
 
-/-- Bind `k` to `v` in the innermost frame. Shadows any outer binding. -/
-public def set (env : Env) (k : String) (v : MalVal) : IO Unit :=
+/-- A new nested env populated with `bindings` in one ref allocation —
+avoids the N `current.modify` calls a fresh `Env.new` + repeated `set`
+would cost just to seed the frame. Used by `bindLambdaArgs` to build a
+closure frame in one pass. Flips `debugEvalMaybeBound` if any of the
+bindings is `DEBUG-EVAL`, same invariant as `set`. -/
+public def newWithBindings (parent : Env)
+    (bindings : Std.HashMap String MalVal) : IO Env := do
+  let r ← IO.mkRef bindings
+  let i ← IO.mkRef none
+  if bindings.contains "DEBUG-EVAL" then debugEvalMaybeBound.set true
+  return { current := r, outer := some parent, idRef := i }
+
+/-- Bind `k` to `v` in the innermost frame (shadows any outer binding).
+Flips `debugEvalMaybeBound` when `k = "DEBUG-EVAL"` so `Debug.trace`
+switches off its fast-path skip and starts walking the env chain. -/
+public def set (env : Env) (k : String) (v : MalVal) : IO Unit := do
   env.current.modify (·.insert k v)
+  if k == "DEBUG-EVAL" then debugEvalMaybeBound.set true
 
-/-- Look up `k`, walking parent frames on miss. -/
+/-- Look up `k` walking the entire chain. -/
 public partial def find? (env : Env) (k : String) : IO (Option MalVal) := do
   let data ← env.current.get
   match data[k]? with
   | some v => return some v
-  | none =>
+  | none   =>
     match env.outer with
-    | some p => p.find? k
+    | some o => o.find? k
     | none   => return none
+
+/-- The root frame (`outer = none`). `(eval …)` and `(load-file …)` use
+this to evaluate in the root env regardless of call site. -/
+public partial def root (env : Env) : Env :=
+  match env.outer with
+  | none   => env
+  | some o => o.root
 
 end Env
