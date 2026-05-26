@@ -40,10 +40,10 @@ def isSpecialForm : String → Bool
   | "let*" | "do"        | "if"  | "try*"               => true
   | _                                                   => false
 
-/-- Walk `params` and `args` in lockstep, threading a `HashMap`. Returns
-the populated map plus any leftover args (consumed by a rest-param or
-flagged as an arity error). Leftover params (when args run out first)
-flow back via the returned `params` tail in the caller's error path. -/
+/-- Walk `params` and `args` in lockstep, building a `HashMap` of
+positional bindings. Returns `(hm, leftoverParams, leftoverArgs)` —
+whichever side ran out first is empty, the other carries the remainder
+for the caller to convert into a rest-bind or an arity-mismatch error. -/
 private def bindPositional :
     (hm : Std.HashMap String MalVal) → (params : List String) →
     (args : List MalVal) →
@@ -53,10 +53,10 @@ private def bindPositional :
   | hm, p :: ps, a :: as => bindPositional (hm.insert p a) ps as
 
 /-- Build a fresh child env of `parent` populated with `l`'s positional
-and (optional) rest-parameter bindings. One ref allocation per call —
-versus the prior `Env.new + N × current.modify` which paid N ref ops
-just to seed the map. Shared by `evalLoop`'s tail-call path and
-`apply`'s non-tail entry. -/
+and (optional) rest-parameter bindings in a single `Env.newWithBindings`
+ref allocation. Avoids the K `current.modify` ops an `Env.new + repeated
+set` pattern would pay just to seed the closure's frame. Shared by
+`evalLoop`'s tail-call path and `apply`'s non-tail entry. -/
 def bindLambdaArgs (parent : Env) (l : Lambda)
     (args : List MalVal) : MalIO Env := do
   let (hm, leftoverParams, leftoverArgs) :=
@@ -153,6 +153,8 @@ mutual
           ast := if (← eval env pred).isTruthy then thn else els
         | _ => throw (.str "if: expected (if pred then [else])")
       | .list (head :: args) =>
+        -- Two-step to dodge a Lean parser quirk: `let mut x ← <multi-line>`
+        -- mis-elaborates `x` as immutable when the rhs spans an `if`/`match`.
         let initialHead ← if let some h := cachedHead then pure h
                           else eval env head
         let mut callHead := initialHead

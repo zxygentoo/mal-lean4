@@ -40,12 +40,13 @@ public initialize shouldSweep : IO.Ref Bool ← IO.mkRef false
 /-- Number of new `store` entries between automatic sweeps. -/
 public def threshold : Nat := 1000
 
-/-- One-way flag: flipped to `true` by `Env.set` the first time any frame
-binds `DEBUG-EVAL`. While `false`, `Debug.trace` skips its env-chain walk
-entirely — saving an O(depth) lookup on every `evalLoop` iteration in
-benchmark code that never touches the trace hook. Never cleared: once
-set, the env walk takes over and correctly returns `none` for the
-not-currently-bound case. -/
+/-- One-way flag: set to `true` by `Env.set` / `Env.newWithBindings` when
+they bind `DEBUG-EVAL` in any frame. While `false`, `Debug.trace` skips
+the env-chain walk entirely — saving an O(depth) lookup on every
+`evalLoop` iteration in benchmark code that never touches the trace
+hook. Never cleared: once set, the env walk takes over and correctly
+returns `none` for the not-currently-bound case (an out-of-scope
+`DEBUG-EVAL` binding). -/
 public initialize debugEvalMaybeBound : IO.Ref Bool ← IO.mkRef false
 
 /-- Stash `env` in the registry and return its handle. Also writes the
@@ -85,9 +86,11 @@ public def new (parent : Env) : IO Env := do
   let i ← IO.mkRef none
   return { current := r, outer := some parent, idRef := i }
 
-/-- A new nested env populated with `bindings` in one ref allocation,
-saving the N `current.modify` calls a fresh `new + repeated set` would
-do. Used by `bindLambdaArgs` to build a closure frame in one pass. -/
+/-- A new nested env populated with `bindings` in one ref allocation —
+avoids the N `current.modify` calls a fresh `Env.new` + repeated `set`
+would cost just to seed the frame. Used by `bindLambdaArgs` to build a
+closure frame in one pass. Flips `debugEvalMaybeBound` if any of the
+bindings is `DEBUG-EVAL`, same invariant as `set`. -/
 public def newWithBindings (parent : Env)
     (bindings : Std.HashMap String MalVal) : IO Env := do
   let r ← IO.mkRef bindings
@@ -96,8 +99,8 @@ public def newWithBindings (parent : Env)
   return { current := r, outer := some parent, idRef := i }
 
 /-- Bind `k` to `v` in the innermost frame (shadows any outer binding).
-Flips `debugEvalMaybeBound` the first time `k = "DEBUG-EVAL"` to let
-`Debug.trace` keep its fast-path skip on every other binding. -/
+Flips `debugEvalMaybeBound` when `k = "DEBUG-EVAL"` so `Debug.trace`
+switches off its fast-path skip and starts walking the env chain. -/
 public def set (env : Env) (k : String) (v : MalVal) : IO Unit := do
   env.current.modify (·.insert k v)
   if k == "DEBUG-EVAL" then debugEvalMaybeBound.set true
