@@ -40,6 +40,14 @@ public initialize shouldSweep : IO.Ref Bool ← IO.mkRef false
 /-- Number of new `store` entries between automatic sweeps. -/
 public def threshold : Nat := 1000
 
+/-- One-way flag: flipped to `true` by `Env.set` the first time any frame
+binds `DEBUG-EVAL`. While `false`, `Debug.trace` skips its env-chain walk
+entirely — saving an O(depth) lookup on every `evalLoop` iteration in
+benchmark code that never touches the trace hook. Never cleared: once
+set, the env walk takes over and correctly returns `none` for the
+not-currently-bound case. -/
+public initialize debugEvalMaybeBound : IO.Ref Bool ← IO.mkRef false
+
 /-- Stash `env` in the registry and return its handle. Also writes the
 assigned id into `env.idRef` so `GC.markEnv` can mark the slot reachable
 when it walks `env` (or any env that chains to it). The post-push
@@ -77,9 +85,22 @@ public def new (parent : Env) : IO Env := do
   let i ← IO.mkRef none
   return { current := r, outer := some parent, idRef := i }
 
-/-- Bind `k` to `v` in the innermost frame (shadows any outer binding). -/
-public def set (env : Env) (k : String) (v : MalVal) : IO Unit :=
+/-- A new nested env populated with `bindings` in one ref allocation,
+saving the N `current.modify` calls a fresh `new + repeated set` would
+do. Used by `bindLambdaArgs` to build a closure frame in one pass. -/
+public def newWithBindings (parent : Env)
+    (bindings : Std.HashMap String MalVal) : IO Env := do
+  let r ← IO.mkRef bindings
+  let i ← IO.mkRef none
+  if bindings.contains "DEBUG-EVAL" then debugEvalMaybeBound.set true
+  return { current := r, outer := some parent, idRef := i }
+
+/-- Bind `k` to `v` in the innermost frame (shadows any outer binding).
+Flips `debugEvalMaybeBound` the first time `k = "DEBUG-EVAL"` to let
+`Debug.trace` keep its fast-path skip on every other binding. -/
+public def set (env : Env) (k : String) (v : MalVal) : IO Unit := do
   env.current.modify (·.insert k v)
+  if k == "DEBUG-EVAL" then debugEvalMaybeBound.set true
 
 /-- Look up `k` walking the entire chain. -/
 public partial def find? (env : Env) (k : String) : IO (Option MalVal) := do

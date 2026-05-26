@@ -40,23 +40,41 @@ def isSpecialForm : String → Bool
   | "let*" | "do"        | "if"  | "try*"               => true
   | _                                                   => false
 
-/-- Bind a lambda's positional and (optional) rest parameters into
-`closureEnv`. Shared by `evalLoop`'s tail-call path and `apply`'s
-non-tail entry. -/
-def bindLambdaArgs (closureEnv : Env) (l : Lambda)
-    (args : List MalVal) : MalIO Unit := do
-  let n := l.params.length
-  match l.restParam with
-  | none =>
-    if n ≠ args.length then
-      throw (.str s!"arity mismatch: expected {n}, got {args.length}")
-    for (p, a) in l.params.zip args do closureEnv.set p a
-  | some restName =>
-    if args.length < n then
-      throw (.str s!"arity mismatch: expected at least {n}, got {args.length}")
-    let (positional, rest) := (args.take n, args.drop n)
-    for (p, a) in l.params.zip positional do closureEnv.set p a
-    closureEnv.set restName (.list rest)
+/-- Walk `params` and `args` in lockstep, threading a `HashMap`. Returns
+the populated map plus any leftover args (consumed by a rest-param or
+flagged as an arity error). Leftover params (when args run out first)
+flow back via the returned `params` tail in the caller's error path. -/
+private def bindPositional :
+    (hm : Std.HashMap String MalVal) → (params : List String) →
+    (args : List MalVal) →
+    Std.HashMap String MalVal × List String × List MalVal
+  | hm, [],      rest    => (hm, [], rest)
+  | hm, ps,      []      => (hm, ps, [])
+  | hm, p :: ps, a :: as => bindPositional (hm.insert p a) ps as
+
+/-- Build a fresh child env of `parent` populated with `l`'s positional
+and (optional) rest-parameter bindings. One ref allocation per call —
+versus the prior `Env.new + N × current.modify` which paid N ref ops
+just to seed the map. Shared by `evalLoop`'s tail-call path and
+`apply`'s non-tail entry. -/
+def bindLambdaArgs (parent : Env) (l : Lambda)
+    (args : List MalVal) : MalIO Env := do
+  let (hm, leftoverParams, leftoverArgs) :=
+    bindPositional ∅ l.params args
+  if !leftoverParams.isEmpty then
+    let needed := l.params.length
+    let got    := needed - leftoverParams.length
+    let qual   := if l.restParam.isSome then " at least" else ""
+    throw (.str s!"arity mismatch: expected{qual} {needed}, got {got}")
+  let hm ← match l.restParam with
+    | some restName => pure (hm.insert restName (.list leftoverArgs))
+    | none          =>
+      if leftoverArgs.isEmpty then pure hm
+      else
+        let needed := l.params.length
+        let got    := needed + leftoverArgs.length
+        throw (.str s!"arity mismatch: expected {needed}, got {got}")
+  Env.newWithBindings parent hm
 
 mutual
   /-- Leaf forms short-circuit; non-leaf forms enter `evalLoop` under a
@@ -86,13 +104,23 @@ mutual
         ast := quasiquote arg
         continue
 
-      -- Macroexpand before tracing so DEBUG-EVAL shows the expanded form.
-      -- Skip the env lookup inside `macroexpand` for known special-form
-      -- heads (they can't be macros) and for non-`.list`-of-sym shapes
-      -- (`macroexpand` would no-op).
-      if let .list (.sym name :: _) := ast then
+      -- For `.list (.sym name :: args)` that isn't a special form, look
+      -- the head up once and either (a) macroexpand + continue, or (b)
+      -- stash the value in `cachedHead` so the call dispatch below can
+      -- skip the second `env.find?` that `eval env head` would do. Other
+      -- shapes (computed heads, special forms, non-list ast) leave
+      -- `cachedHead = none` and fall through unchanged.
+      let mut cachedHead : Option MalVal := none
+      if let .list (.sym name :: args) := ast then
         unless isSpecialForm name do
-          ast ← macroexpand env ast
+          match ← env.find? name with
+          | some v =>
+            if let .fn (.lambda lam) := v.strip then
+              if lam.isMacro then
+                ast ← macroexpand env (← apply env (.fn (.lambda lam)) args)
+                continue
+            cachedHead := some v
+          | none => pure ()  -- second lookup in the call arm will throw
       Debug.trace env ast
 
       match ast with
@@ -125,7 +153,9 @@ mutual
           ast := if (← eval env pred).isTruthy then thn else els
         | _ => throw (.str "if: expected (if pred then [else])")
       | .list (head :: args) =>
-        let mut callHead ← eval env head
+        let initialHead ← if let some h := cachedHead then pure h
+                          else eval env head
+        let mut callHead := initialHead
         let mut callArgs ← args.mapM (eval env)
         -- `(apply f xs)` peels into `(f x1 x2 …)` so user lambdas
         -- dispatched via the `apply` builtin still hit the host-level
@@ -147,8 +177,7 @@ mutual
           return ← Core.callBuiltin name env eval (apply env) callArgs
         | .fn (.lambda l) =>
           let outerEnv ← Env.lookup l.outerId
-          let closureEnv ← outerEnv.new
-          bindLambdaArgs closureEnv l callArgs
+          let closureEnv ← bindLambdaArgs outerEnv l callArgs
           env := closureEnv
           envRef.set env
           ast := l.body
@@ -221,8 +250,7 @@ mutual
       Core.callBuiltin name callerEnv eval (apply callerEnv) args
     | .fn (.lambda l) =>
       let outerEnv ← Env.lookup l.outerId
-      let closureEnv ← outerEnv.new
-      bindLambdaArgs closureEnv l args
+      let closureEnv ← bindLambdaArgs outerEnv l args
       eval closureEnv l.body
     | _ => throw (.str "first item in list is not callable")
 
