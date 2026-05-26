@@ -5,6 +5,7 @@ public import MalLean4.Env
 import MalLean4.Atoms
 import MalLean4.Printer
 import MalLean4.Reader
+import Std.Data.HashMap.Basic
 
 set_option linter.missingDocs true
 
@@ -541,6 +542,10 @@ def table : List (String × MalFn) :=
     ("map",         map),
     ("nth",         nth) ]
 
+/-- `table` indexed by builtin name for O(1) dispatch. -/
+private def tableMap : Std.HashMap String MalFn :=
+  table.foldl (fun m (k, v) => m.insert k v) ∅
+
 /-- Dispatch a builtin by `name` with the step's `eval`/`apply` callbacks
 (`apply` should be partially applied with the caller's env). Errors if
 `name` is not a registered builtin. -/
@@ -551,9 +556,9 @@ public def callBuiltin
     (apply : MalVal → List MalVal → MalIO MalVal)
     (args : List MalVal)
     : MalIO MalVal := do
-  match table.find? (·.1 == name) with
-  | some (_, impl) => impl { env, eval, apply } args
-  | none           => throw (.str s!"unknown builtin '{name}'")
+  match tableMap[name]? with
+  | some impl => impl { env, eval, apply } args
+  | none      => throw (.str s!"unknown builtin '{name}'")
 
 /-- The starting environment for the mal REPL, with every builtin bound by
 name. -/
