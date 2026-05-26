@@ -1,0 +1,4 @@
+#!/bin/sh
+# Mal launcher following upstream's convention: `STEP=stepN ./run …`
+# runs the corresponding `lake`-built binary. Defaults to `stepA_mal`.
+exec "$(dirname "$0")/.lake/build/bin/${STEP:-stepA_mal}" "$@"

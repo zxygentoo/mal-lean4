@@ -4,7 +4,8 @@ Conventions for AI agents working in this repo.
 
 This project implements [Mal](https://github.com/kanaka/mal) in Lean 4.
 Each step (`step0_repl`, …, `stepA_mal`) is a `lean_exe`; shared library
-code lives in `MalLean4/`; tests run via `tests/run.sh`.
+code lives in `MalLean4/`; tests run via `make test` — see _Test
+infrastructure_ below.
 
 ## Module layout
 
@@ -12,15 +13,15 @@ Library and step files follow different conventions.
 
 |                    | Library files | Step files |
 |--------------------|---------------|------------|
-| Examples           | `Types.lean`, `Env.lean`, `Core.lean`, `Reader.lean`, `Printer.lean` | `Step0Repl.lean`, `Step1ReadPrint.lean`, … |
+| Examples           | `Types.lean`, `Env.lean`, `Core.lean`, … | `Step0Repl.lean`, `Step1ReadPrint.lean`, … |
 | File header        | `module`      | (none)     |
 | Namespace          | `namespace X … end X` | flat |
 | Default visibility | private       | public     |
 | `main`             | n/a           | required, at root namespace |
 
 `main` must live at the root namespace — the linker won't find it inside
-any `namespace` block — which is what forces step files to stay flat (no
-namespace, no opting into the new module system).
+any `namespace` block — so step files stay flat and opt out of the new
+module system.
 
 ## Public surface
 
@@ -98,9 +99,9 @@ and `Lambda { outerEnv : Env }` directly (because `Env` chains back
 through `MalVal`), so each constructor holds a `Nat` id and the table
 stores the actual data.
 
-Real fixes considered and rejected:
-- `unsafe inductive` for the atom and env cases — contagious `unsafe`
-  keyword across every `MalVal`-touching def.
+Alternatives considered and rejected:
+- `unsafe inductive` for the atom and env cases — the `unsafe` keyword
+  is contagious across every `MalVal`-touching def.
 - `opaque Cell : Type` with FFI-backed `IO.Ref MalVal` underneath — gets
   proper RC, but requires C glue and shifts the project from "Lean only"
   to "Lean + FFI."
@@ -116,16 +117,16 @@ still grows by one `Option` slot per allocation; the heavy payload (the
 captured frame's `HashMap` and the values it pinned) becomes collectable.
 
 `GC.maybeRun` fires at two host-safe points: (1) the REPL loop between
-top-level expressions and (2) between sequenced forms inside `evalDo`'s
-`x :: xs` case. The trigger threshold is ~1000 new `Env.store`
-registrations since the last sweep.
+top-level expressions and (2) inside `evalDo`, after the non-last forms
+finish and before the last one runs in tail position. The trigger
+threshold is ~1000 new `Env.store` registrations since the last sweep.
 
-`evalDo`-between-forms is safe because the previous form's result has
-been bound to `_` (discarded), the remaining `xs` are unevaluated AST
-(no live closures), and walking `env` catches everything that's still
-live. This covers script-mode self-host: both mal-in-mal's main REPL
-loop and its `EVAL` body are `(do …)` sequences, so GC fires once per
-mal-level expression even though our host REPL loop never gets a turn.
+The `evalDo` site is safe because the non-last forms' results were
+discarded (`let _ ← eval env x`), the last form is still AST (no live
+closures from it yet), and walking `env` catches everything reachable.
+This covers script-mode self-host: both mal-in-mal's main REPL loop and
+its `EVAL` body are `(do …)` sequences, so GC fires once per mal-level
+expression even though our host REPL loop never gets a turn.
 
 Other "between sub-evaluations" spots aren't safe — `evalLet` would
 need to walk from `letEnv` instead of `env` (the new bindings aren't
@@ -161,3 +162,19 @@ equality, and every type predicate transparently strip the wrapper via
 whether the head is callable) see it. Construction sites in the reader
 (`^meta value` reader macro) and the runtime (`with-meta` builtin) are
 the only places that produce `.withMeta`.
+
+## Test infrastructure
+
+Canonical mal tests, lib files, and `runtest.py` come from upstream's
+[kanaka/mal](https://github.com/kanaka/mal) repo, vendored as the `mal/`
+git submodule. The `Makefile` drives `mal/runtest.py` against our
+binaries via the root `run` launcher (`STEP=stepN ./run …`, upstream
+convention) using `--rundir mal/tests/` so `(load-file "../lib/X.mal")`
+in test files resolves to `mal/lib/X.mal`.
+
+Don't re-vendor upstream files locally — `make` reads them directly from
+`mal/`. To pick up upstream updates, bump the submodule:
+`git -C mal checkout <newer-commit> && git add mal`. The `tests/`
+directory exists for impl-specific overrides (e.g. skipping a test our
+impl can't satisfy), matching upstream's `impls/<lang>/tests/`
+convention; currently empty.

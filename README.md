@@ -10,38 +10,35 @@ A [Make-A-Lisp](https://github.com/kanaka/mal) implementation in Lean 4.
   `leanprover/lean4:v4.29.1`; required for the new module system). Install
   via [elan](https://github.com/leanprover/elan); the right toolchain is
   fetched automatically on first `lake build`.
-- **Python 3** — for the mal test harness at `tests/runtest.py`. Standard
-  library only; no `pip install` needed.
+- **Python 3** — for upstream's `runtest.py` (in the `mal/` submodule).
+  Standard library only; no `pip install` needed.
+- **git submodule init** — canonical tests and lib live in upstream's
+  [`mal`](https://github.com/kanaka/mal) repo, vendored as the `mal/`
+  submodule. Clone with `--recurse-submodules`, or run
+  `git submodule update --init` after a plain clone.
 
 ```sh
-lake build                       # build all step binaries
-lake exe step2_eval              # run a step interactively
-tests/run.sh                     # run the mal test harness on all steps
-tests/run.sh step2_eval          # run tests for one step
-tests/run.sh lib                 # run lib tests against stepA_mal
+make                             # alias for `make build`
+make build                       # `lake build` (all step exes)
+make test                        # all step suites (no deferrable / no optional)
+make test^step5_tco              # one step's suite
+make test^stepA-full             # stepA with deferrable + optional flags on
+make test^lib                    # all canonical lib tests against stepA
+make test^lib^memoize            # one lib test
+make test^mal                    # all mal-in-mal step suites hosted on stepA
+make test^mal^step4_if_fn_do     # one mal-in-mal step
+make test^mal-full               # mal-in-mal stepA with deferrable + optional
+make bench                       # fib(25) x 3 and fib(28) x 3
+make repl                        # interactive stepA
+make repl^mal                    # interactive mal-in-mal stepA on stepA host
+make clean                       # `lake clean`
 ```
 
-## Project layout
-
-```
-MalLean4/
-  Types.lean         MalVal (incl. vec/map/keyword/withMeta wrapper) + Fn + Lambda
-  Env.lean           env frames + global env registry (`Env.store`, indexed by Nat)
-  Atoms.lean         atom registry (mal's explicit mutable cells)
-  Core.lean          builtins + initialEnv + Context (private)
-  Debug.lean         DEBUG-EVAL trace hook
-  GC.lean            mark-and-sweep over `Env.store` and `Atoms.store`
-  Reader.lean        tokenizer + parser (hand-written, no regex)
-  Printer.lean       pretty-printer
-  Step*.lean         one file per step's executable
-  StepAMal.lean      final step: macros + try* + quasi + variadic + *host-language*
-
-tests/
-  runtest.py         mal harness (verbatim from upstream)
-  step*_*.mal        test cases (verbatim from upstream)
-  run.sh             wrapper that builds and invokes runtest.py
-  test.txt, *.mal    fixtures for step 6 (slurp / load-file targets)
-```
+Tests use upstream's `runtest.py` via `--rundir mal/tests/`, so paths
+like `(load-file "../lib/perf.mal")` resolve against the upstream tree.
+The same rundir lets `mal-in-mal`'s `(load-file "../mal/env.mal")` find
+`mal/impls/mal/env.mal` (because `mal/tests` is itself a symlink to
+`mal/impls/tests`, so `..` resolves into `mal/impls/`).
 
 ## Status
 
@@ -61,30 +58,26 @@ All 863 step tests pass — required, deferrable, and optional:
 | 9 — try/catch     | `step9_try`         | 173 / 173       |
 | A — mal           | `stepA_mal`         | 113 / 113       |
 
-The upstream library tests (`tests/lib/*.mal`) also pass: 168 / 169
+The upstream library tests (`mal/tests/lib/*.mal`) also pass: 168 / 169
 against `stepA_mal`. The single failure is `memoize.mal`, which runs
 naïve `(fib 32)` (~5M calls, exponential — TCO doesn't help shape, just
 depth). Our interpreter is fast enough to handle ~1M iterations in 7.5s,
 so fib(32) needs roughly 40s and times out at the harness limit.
 
+Mal-in-mal (`make test^mal`): all 10 hosted-step suites pass (step5_tco
+is skipped — mal-in-mal doesn't ship one, TCO is the host's job). The
+full `make test^mal-full` (stepA deferrable + optional) also passes —
+113 / 113 — confirming our stepA can host mal-in-mal's mal-language
+interpreter without divergence.
+
 `stepA_mal` has real TCO — `eval` is a `while true` loop with mutable
 `env`/`ast`; tail-position forms (`let*` body, `do` last, `if` branch,
 lambda application body, `quasiquote` rewrite, bare `try*`) update the
 locals and continue. Native deep tail recursion runs 10M-deep without
-stack growth; self-host (`stepA_mal stepA_mal.mal` from upstream
-`impls/mal/`) runs ~10k user-level recursions in seconds and ~50k in a
-few minutes — bounded by interpretation throughput, not stack. Step5–9
-still use recursive eval (Lean's compiler optimizes monadic tail calls
-well enough for their native test cases); propagating the loop shape
-back is mechanical follow-up.
-
-## Follow-ups
-
-- **Self-host throughput.** ~5 ms per mal-level iteration through
-  mal-in-mal. Most of that is mal-in-mal's `EVAL` doing dispatch in mal,
-  not host overhead. Compile-time macros (`(def! and ^{:inline? true}
-  and)` etc.) and a faster builtin-lookup path would help.
-- **Propagate TCO to step5–9.** Mechanical translation of stepA's loop
-  shape.
+stack growth; mal-in-mal hosting (see `make repl^mal`) runs ~10k
+user-level recursions in seconds, bounded by interpretation throughput
+rather than stack. Step5–9 still use recursive eval — Lean's compiler
+optimizes their monadic tail calls well enough for the native test
+cases.
 
 See [AGENTS.md](AGENTS.md) for project conventions.
