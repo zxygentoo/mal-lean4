@@ -26,16 +26,23 @@ mutual
       | _ => .list [.sym "cons", quasiquote x, rest]
 end
 
-@[inline]
 def lookupSym (env : Env) (s : String) : MalIO MalVal := do
   match ← env.find? s with
   | some v => return v
   | none   => throw (.str s!"'{s}' not found")
 
+/-- Special-form heads handled directly by `evalLoop`'s dispatch match.
+Macroexpansion is skipped for these — the env lookup inside `macroexpand`
+would just return nothing, since users can't bind these as macros without
+shadowing the evaluator-level dispatch (which fires first). -/
+def isSpecialForm : String → Bool
+  | "def!" | "defmacro!" | "fn*" | "quote" | "macroexpand"
+  | "let*" | "do"        | "if"  | "try*"               => true
+  | _                                                   => false
+
 /-- Bind a lambda's positional and (optional) rest parameters into
 `closureEnv`. Shared by `evalLoop`'s tail-call path and `apply`'s
 non-tail entry. -/
-@[inline]
 def bindLambdaArgs (closureEnv : Env) (l : Lambda)
     (args : List MalVal) : MalIO Unit := do
   let n := l.params.length
@@ -80,7 +87,12 @@ mutual
         continue
 
       -- Macroexpand before tracing so DEBUG-EVAL shows the expanded form.
-      ast ← macroexpand env ast
+      -- Skip the env lookup inside `macroexpand` for known special-form
+      -- heads (they can't be macros) and for non-`.list`-of-sym shapes
+      -- (`macroexpand` would no-op).
+      if let .list (.sym name :: _) := ast then
+        unless isSpecialForm name do
+          ast ← macroexpand env ast
       Debug.trace env ast
 
       match ast with
