@@ -12,10 +12,27 @@ A [Make-A-Lisp](https://github.com/kanaka/mal) implementation in Lean 4.
   fetched automatically on first `lake build`.
 - **Python 3** — for upstream's `runtest.py` (in the `mal/` submodule).
   Standard library only; no `pip install` needed.
-- **git submodule init** — canonical tests and lib live in upstream's
-  [`mal`](https://github.com/kanaka/mal) repo, vendored as the `mal/`
-  submodule. Clone with `--recurse-submodules`, or run
-  `git submodule update --init` after a plain clone.
+
+### Clone repo
+
+Canonical tests, library files, and `runtest.py` live in upstream's
+[`mal`](https://github.com/kanaka/mal) repo, vendored as the `mal/`
+submodule. Clone with submodules in one go:
+
+```sh
+git clone --recurse-submodules https://github.com/zxygentoo/mal-lean4.git
+cd mal-lean4
+```
+
+Or initialize submodules after a plain clone:
+
+```sh
+git clone https://github.com/zxygentoo/mal-lean4.git
+cd mal-lean4
+git submodule update --init
+```
+
+### Build & test
 
 ```sh
 make                             # alias for `make build`
