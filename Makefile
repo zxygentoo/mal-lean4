@@ -2,17 +2,20 @@
 # `mal/` git submodule; this Makefile drives upstream's runtest.py against
 # our `lake`-built binaries via the root `run` launcher.
 #
+# Tests run with deferrable + optional enabled by default — matches
+# upstream's `make test^<impl>` behavior, since our final impl supports
+# every feature each step's tests reach for. Pass `OPTS=--no-deferrable
+# --no-optional` for a quick pass during dev.
+#
 # Usage:
 #   make                          # alias for `make build`
 #   make build                    # `lake build` (all step exes)
-#   make test                     # all step suites, no-deferrable / no-optional
+#   make test                     # all step suites (deferrable + optional)
 #   make test^step5_tco           # one step's suite
-#   make test^stepA-full          # stepA with deferrable+optional enabled
-#   make test^lib                 # all tests/lib/*.mal against stepA
+#   make test^lib                 # all canonical lib tests against stepA
 #   make test^lib^memoize         # one lib test
 #   make test^mal                 # all mal-in-mal step suites hosted on stepA
 #   make test^mal^step4_if_fn_do  # one mal-in-mal step
-#   make test^mal-full            # mal-in-mal stepA with deferrable+optional
 #   make bench                    # fib(25) x 3 and fib(28) x 3
 #   make repl                     # interactive stepA
 #   make repl^mal                 # interactive mal-in-mal stepA on stepA host
@@ -42,12 +45,13 @@ MIM_TARGETS  := $(MIM_STEPS:%=test^mal^%)
 # default timeouts so even the slower steps finish.
 MIM_TIMEOUT  := --start-timeout 60 --test-timeout 180
 
-# Pass extra args through: `make test^step5_tco OPTS="--hard"`.
+# Pass extra args through: `make test OPTS="--no-deferrable --no-optional"`
+# for a fast partial run, or `make test^step5_tco OPTS="--hard"` to turn
+# soft failures into hard ones.
 OPTS         ?=
-DEFAULT_OPTS := --no-deferrable --no-optional
 
-.PHONY: all build test test^lib test^stepA-full test^mal test^mal-full bench \
-        repl repl^mal clean check-submodule \
+.PHONY: all build test test^lib test^mal bench repl repl^mal clean \
+        check-submodule \
         $(STEP_TARGETS) $(LIB_TARGETS) $(MIM_TARGETS)
 
 all: build
@@ -69,12 +73,7 @@ test: $(STEP_TARGETS)
 # stepA_mal otherwise).
 $(STEP_TARGETS): test^%: build
 	@echo '=== $* ==='
-	STEP=$* $(RUNTEST) --rundir $(RUNDIR) $(DEFAULT_OPTS) $(OPTS) $*.mal -- $(RUN)
-
-# stepA with deferrable+optional flags on (full conformance).
-test^stepA-full: build
-	@echo '=== stepA_mal (deferrable + optional) ==='
-	$(RUNTEST) --rundir $(RUNDIR) $(OPTS) stepA_mal.mal -- $(RUN)
+	STEP=$* $(RUNTEST) --rundir $(RUNDIR) $(OPTS) $*.mal -- $(RUN)
 
 test^lib: $(LIB_TARGETS)
 
@@ -91,15 +90,8 @@ test^mal: $(MIM_TARGETS)
 
 $(MIM_TARGETS): test^mal^%: build
 	@echo '=== mal/$* (mal-in-mal hosted on stepA_mal) ==='
-	$(RUNTEST) --rundir $(RUNDIR) $(MIM_TIMEOUT) $(DEFAULT_OPTS) $(OPTS) \
-	  $*.mal -- $(RUN) $(abspath $(MAL)/impls/mal/$*.mal)
-
-# Mal-in-mal stepA with deferrable+optional flags on. Same caveats as
-# test^stepA-full: slow, but the conformance gold standard.
-test^mal-full: build
-	@echo '=== mal/stepA_mal (mal-in-mal, deferrable + optional) ==='
 	$(RUNTEST) --rundir $(RUNDIR) $(MIM_TIMEOUT) $(OPTS) \
-	  stepA_mal.mal -- $(RUN) $(abspath $(MAL)/impls/mal/stepA_mal.mal)
+	  $*.mal -- $(RUN) $(abspath $(MAL)/impls/mal/$*.mal)
 
 bench: build
 	@cd $(MAL)/tests && for N in 25 28; do \
