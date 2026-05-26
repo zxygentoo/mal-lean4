@@ -26,48 +26,52 @@ mutual
       | _ => .list [.sym "cons", quasiquote x, rest]
 end
 
-mutual
-  /-- Shared by `evalLoop`'s tail-call path and `apply`'s non-tail entry. -/
-  partial def bindLambdaArgs (closureEnv : Env) (l : Lambda)
-      (args : List MalVal) : MalIO Unit := do
-    let n := l.params.length
-    match l.restParam with
-    | none =>
-      if n ≠ args.length then
-        throw (.str s!"arity mismatch: expected {n}, got {args.length}")
-      for (p, a) in l.params.zip args do closureEnv.set p a
-    | some restName =>
-      if args.length < n then
-        throw (.str s!"arity mismatch: expected at least {n}, got {args.length}")
-      let (positional, rest) := (args.take n, args.drop n)
-      for (p, a) in l.params.zip positional do closureEnv.set p a
-      closureEnv.set restName (.list rest)
+@[inline]
+def lookupSym (env : Env) (s : String) : MalIO MalVal := do
+  match ← env.find? s with
+  | some v => return v
+  | none   => throw (.str s!"'{s}' not found")
 
-  /-- Pushes an `IO.Ref Env` onto `GC.roots` so a sweep fired by a deeper
-  frame walks this frame's *current* env. The ref is re-synced only when
-  a tail-position form rebinds `env` (`let*` body, lambda apply) — every
-  other iteration leaves it alone. Leaf forms (literals, sym lookup,
-  empty list) short-circuit before the setup — they don't recurse, so
-  no GC root is needed. -/
+/-- Bind a lambda's positional and (optional) rest parameters into
+`closureEnv`. Shared by `evalLoop`'s tail-call path and `apply`'s
+non-tail entry. -/
+@[inline]
+def bindLambdaArgs (closureEnv : Env) (l : Lambda)
+    (args : List MalVal) : MalIO Unit := do
+  let n := l.params.length
+  match l.restParam with
+  | none =>
+    if n ≠ args.length then
+      throw (.str s!"arity mismatch: expected {n}, got {args.length}")
+    for (p, a) in l.params.zip args do closureEnv.set p a
+  | some restName =>
+    if args.length < n then
+      throw (.str s!"arity mismatch: expected at least {n}, got {args.length}")
+    let (positional, rest) := (args.take n, args.drop n)
+    for (p, a) in l.params.zip positional do closureEnv.set p a
+    closureEnv.set restName (.list rest)
+
+mutual
+  /-- Leaf forms short-circuit; non-leaf forms enter `evalLoop` under a
+  GC root push. The root is re-synced when a tail-position form rebinds
+  `env` (`let*` body, lambda apply) so a sweep fired by a deeper frame
+  sees the current env, not the call-site env. -/
   partial def eval (env₀ : Env) (ast₀ : MalVal) : MalIO MalVal := do
     match ast₀ with
-    | .nil | .bool _ | .int _ | .str _ | .kw _ | .fn _ | .atom _ =>
+    | .nil | .bool _ | .int _ | .str _ | .kw _ | .fn _ | .atom _ | .list [] =>
       return ast₀
-    | .sym s =>
-      match ← env₀.find? s with
-      | some v => return v
-      | none   => throw (.str s!"'{s}' not found")
-    | .list [] => return .list []
+    | .sym s => lookupSym env₀ s
     | _ =>
       let envRef ← IO.mkRef env₀
       GC.roots.modify (envRef :: ·)
-      let result ← tryCatch (evalLoop envRef ast₀)
+      let result ← tryCatch (evalLoop envRef env₀ ast₀)
         fun e => do GC.roots.modify (·.tail!); throw e
       GC.roots.modify (·.tail!)
       return result
 
-  partial def evalLoop (envRef : IO.Ref Env) (ast₀ : MalVal) : MalIO MalVal := do
-    let mut env ← envRef.get
+  partial def evalLoop (envRef : IO.Ref Env) (env₀ : Env)
+      (ast₀ : MalVal) : MalIO MalVal := do
+    let mut env := env₀
     let mut ast := ast₀
     while true do
       -- Quasiquote: pure AST rewrite; no macroexpand, no trace.
@@ -80,7 +84,6 @@ mutual
       Debug.trace env ast
 
       match ast with
-      | .list []                           => return .list []
       | .list (.sym "def!"        :: rest) => return ← evalDef         env rest
       | .list (.sym "defmacro!"   :: rest) => return ← evalDefmacro    env rest
       | .list (.sym "fn*"         :: rest) => return ← evalFn          env rest
@@ -105,7 +108,7 @@ mutual
       | .list (.sym "if" :: rest) =>
         match rest with
         | [pred, thn]      =>
-          if (← eval env pred).isTruthy then ast := thn else return .nil
+          ast := if (← eval env pred).isTruthy then thn else .nil
         | [pred, thn, els] =>
           ast := if (← eval env pred).isTruthy then thn else els
         | _ => throw (.str "if: expected (if pred then [else])")
@@ -121,13 +124,12 @@ mutual
           | [] | [_] =>
             throw (.str "apply: expected at least a function and a list")
           | f :: rest =>
-            match rest.reverse with
-            | last :: revInit =>
-              match last.strip with
-              | .list lastArgs => callHead := f; callArgs := revInit.reverse ++ lastArgs
-              | .vec  lastArgs => callHead := f; callArgs := revInit.reverse ++ lastArgs
-              | _ => throw (.str "apply: last argument must be a sequence")
-            | _ => throw (.str "apply: last argument must be a sequence")
+            let last :: revInit := rest.reverse
+              | throw (.str "apply: expected at least a function and a list")
+            let some lastArgs := last.toList?
+              | throw (.str "apply: last argument must be a sequence")
+            callHead := f
+            callArgs := revInit.reverse ++ lastArgs
         match callHead.strip with
         | .fn (.builtin name) =>
           return ← Core.callBuiltin name env eval (apply env) callArgs
@@ -143,10 +145,7 @@ mutual
         return .vec (← xs.mapM (eval env))
       | .map ps =>
         return .map (← ps.mapM fun (k, v) => return (k, ← eval env v))
-      | .sym s =>
-        match ← env.find? s with
-        | some v => return v
-        | none   => throw (.str s!"'{s}' not found")
+      | .sym s => return ← lookupSym env s
       | other => return other
     return .nil  -- unreachable; the while loop only exits via `return`
   where
@@ -159,12 +158,11 @@ mutual
 
     evalDefmacro (env : Env) : List MalVal → MalIO MalVal
       | [.sym name, expr] => do
-        match ← eval env expr with
-        | .fn (.lambda l) =>
-          let macroFn : MalVal := .fn (.lambda { l with isMacro := true })
-          env.set name macroFn
-          return macroFn
-        | _ => throw (.str "defmacro!: value must be a function")
+        let .fn (.lambda l) ← eval env expr
+          | throw (.str "defmacro!: value must be a function")
+        let macroFn : MalVal := .fn (.lambda { l with isMacro := true })
+        env.set name macroFn
+        return macroFn
       | _ => throw (.str "defmacro!: expected (defmacro! name expr)")
 
     evalLet (env : Env) : List MalVal → MalIO (Env × MalVal)
@@ -181,18 +179,17 @@ mutual
       | forms => do
         for x in forms.dropLast do
           let _ ← eval env x
-          GC.maybeRun env
+        GC.maybeRun env
         return forms.getLast!
 
     evalFn (env : Env) : List MalVal → MalIO MalVal
       | [paramsForm, body] => do
-        match paramsForm.toList? with
-        | some params => do
-          let (paramNames, restParam) ← Core.parseParams params
-          let envId ← Env.register env
-          return .fn (.lambda { params := paramNames, restParam, body,
-                                outerEnvId := envId })
-        | none => throw (.str "fn*: expected (fn* (params) body)")
+        let some params := paramsForm.toList?
+          | throw (.str "fn*: expected (fn* (params) body)")
+        let (paramNames, restParam) ← Core.parseParams params
+        let envId ← Env.register env
+        return .fn (.lambda { params := paramNames, restParam, body,
+                              outerEnvId := envId })
       | _ => throw (.str "fn*: expected (fn* (params) body)")
 
     evalQuote : List MalVal → MalIO MalVal
@@ -217,17 +214,14 @@ mutual
       eval closureEnv l.body
     | _ => throw (.str "first item in list is not callable")
 
-  partial def macroexpand (env : Env) : MalVal → MalIO MalVal := fun ast => do
-    match ast with
-    | .list (.sym name :: args) =>
-      match (← env.find? name).map MalVal.strip with
-      | some (.fn (.lambda lam)) =>
-        if lam.isMacro then
-          macroexpand env (← apply env (.fn (.lambda lam)) args)
-        else
-          return ast
-      | _ => return ast
-    | _ => return ast
+  partial def macroexpand (env : Env) (ast : MalVal) : MalIO MalVal := do
+    let .list (.sym name :: args) := ast | return ast
+    let some (.fn (.lambda lam)) := (← env.find? name).map MalVal.strip
+      | return ast
+    if lam.isMacro then
+      macroexpand env (← apply env (.fn (.lambda lam)) args)
+    else
+      return ast
 
   partial def bindLet (env : Env) : List MalVal → MalIO Unit
     | []                    => return ()

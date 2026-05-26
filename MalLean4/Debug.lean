@@ -3,6 +3,8 @@ module
 public import MalLean4.Env
 public import MalLean4.Printer
 
+set_option linter.missingDocs true
+
 open Types
 
 namespace Debug

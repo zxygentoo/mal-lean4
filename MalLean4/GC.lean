@@ -4,6 +4,8 @@ public import MalLean4.Env
 public import MalLean4.Atoms
 public import Std.Data.HashSet.Basic
 
+set_option linter.missingDocs true
+
 open Types
 
 -- Mark-and-sweep over `Env.store` and `Atoms.store`. Lambdas register
@@ -89,18 +91,17 @@ public def run (root : Env) : IO Unit := do
   let atomArr ← Atoms.store.get
   Atoms.store.set (atomArr.mapIdx fun i a =>
     if m.atoms.contains i then a else none)
+  -- Reset the registration tracker; `Env.register` will set `shouldSweep`
+  -- again once `threshold` more entries accumulate.
+  Env.lastSweepSize.set (← Env.store.get).size
+  Env.shouldSweep.set false
 
-/-- Number of new `Env.store` registrations between automatic sweeps. -/
-def threshold : Nat := 1000
-
-/-- Trigger `run` if at least `threshold` `Env.register` calls have landed
-since the last sweep. Hot path is a `Nat` read + compare — no array
-allocation, no work — so it's cheap to call from `evalDo` between every
-sequenced form. Safe only at points where the host eval stack isn't
-holding values invisible to `root`. -/
+/-- Trigger `run` if `Env.shouldSweep` is set. Hot path is a `Bool` read.
+The flag is set by `Env.register` when the threshold is exceeded; `run`
+clears it and snapshots `lastSweepSize` after each sweep. Safe only at
+points where the host eval stack isn't holding values invisible to
+`root`. -/
 public def maybeRun (root : Env) : IO Unit := do
-  if (← Env.sinceLastSweep.get) > threshold then
-    run root
-    Env.sinceLastSweep.set 0
+  if (← Env.shouldSweep.get) then run root
 
 end GC

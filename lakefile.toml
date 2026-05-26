@@ -16,7 +16,6 @@ defaultTargets = [
 
 [[lean_lib]]
 name = "MalLean4"
-leanOptions = [{ name = "linter.missingDocs", value = true }]
 
 [[lean_exe]]
 name = "step0_repl"

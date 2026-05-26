@@ -3,6 +3,8 @@ module
 public import MalLean4.Types
 public import Std.Data.HashMap.Basic
 
+set_option linter.missingDocs true
+
 open Types
 
 /-- A mal evaluation environment: a chain of frames, each holding a mutable
@@ -24,21 +26,29 @@ would break strict positivity, same shape as `Atoms.store`). Entries
 become `none` after `GC.run` collects them. -/
 public initialize store : IO.Ref (Array (Option Env)) ← IO.mkRef #[]
 
-/-- Registrations since the last `GC.run`. Incremented by `register`,
-reset by the GC after each sweep. `GC.maybeRun`'s hot-path check is just
-a `Nat` read + compare; nothing reads the bigger `store` array unless we
-actually sweep. -/
-public initialize sinceLastSweep : IO.Ref Nat ← IO.mkRef 0
+/-- `store.size` at the most recent sweep. -/
+public initialize lastSweepSize : IO.Ref Nat ← IO.mkRef 0
+
+/-- Set to `true` when `register` notices we've accumulated more than
+`threshold` new entries since `lastSweepSize`; cleared after `GC.run`.
+`maybeRun`'s hot path is just a `Bool` read. -/
+public initialize shouldSweep : IO.Ref Bool ← IO.mkRef false
+
+/-- Number of new `store` entries between automatic sweeps. -/
+public def threshold : Nat := 1000
 
 /-- Stash `env` in the registry and return its handle. Also writes the
 assigned id into `env.idRef` so `GC.markEnv` can mark the slot reachable
-when it walks `env` (or any env that chains to it). -/
+when it walks `env` (or any env that chains to it). The post-push
+delta-vs-`lastSweepSize` check sets `shouldSweep` once per cycle; most
+registrations are a read + compare, no write. -/
 public def register (env : Env) : IO Nat := do
   let arr ← store.get
   let id := arr.size
   env.idRef.set (some id)
   store.set (arr.push (some env))
-  sinceLastSweep.modify (· + 1)
+  if id + 1 - (← lastSweepSize.get) > threshold then
+    shouldSweep.set true
   return id
 
 /-- Look up the env at `id`. Panics if the id was either never registered

@@ -3,6 +3,8 @@ module
 public import MalLean4.Types
 public import MalLean4.Atoms
 
+set_option linter.missingDocs true
+
 open Types
 
 namespace Printer

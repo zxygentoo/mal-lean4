@@ -1,5 +1,7 @@
 module
 
+set_option linter.missingDocs true
+
 namespace Types
 
 mutual

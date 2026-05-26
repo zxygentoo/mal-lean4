@@ -2,6 +2,8 @@ module
 
 public import MalLean4.Types
 
+set_option linter.missingDocs true
+
 open Types
 
 namespace Atoms

@@ -6,6 +6,8 @@ import MalLean4.Atoms
 import MalLean4.Printer
 import MalLean4.Reader
 
+set_option linter.missingDocs true
+
 open Types
 
 namespace Core
