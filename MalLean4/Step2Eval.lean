@@ -38,7 +38,7 @@ def rep (env : Env) (s : String) : IO (Option String) := do
   match READ s with
   | .ok none       => return none
   | .ok (some ast) =>
-    match ← (EVAL env ast).run with
+    match ← (EVAL env ast).toBaseIO with
     | .ok v    => return some (← PRINT v)
     | .error e => return some s!"Error: {← Printer.prStr e}"
   | .error e       => return some s!"Error: {e}"

@@ -56,12 +56,20 @@ public structure Lambda where
 end
 
 /-- The eval monad: IO for builtins like `prn`, with `MalVal`-typed errors
-so user-thrown values (from `throw`) can be caught structurally by `try*`. -/
-public abbrev MalIO := ExceptT MalVal IO
+so user-thrown values (from `throw`) can be caught structurally by `try*`.
+Uses `EIO MalVal` (one-layer error shape) rather than `ExceptT MalVal IO`
+(two-layer) to halve the per-bind dispatch cost. -/
+public abbrev MalIO := EIO MalVal
 
 /-- Auto-coerce `String` to `MalVal` so existing `throw (.str "...")` sites keep
 working after the error channel switched from `String` to `MalVal`. -/
 public instance : Coe String MalVal := ⟨MalVal.str⟩
+
+/-- Lift `IO α` into `MalIO α`, converting Lean's `IO.Error` into a `MalVal`
+string. Allows existing `IO.println`, `IO.FS.readFile`, etc. calls to work
+inside the `MalIO` monad. -/
+public instance : MonadLift IO MalIO where
+  monadLift m := EIO.adapt (fun e => MalVal.str s!"{e}") m
 
 /-- Mal's truthiness: only `nil` and `false` are falsy. Everything else
 (including 0, the empty list, and the empty string) is truthy. -/

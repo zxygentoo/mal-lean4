@@ -14,8 +14,11 @@ open Types
 envs created by `Env.new` and never captured by a `fn*` keep it as
 `none`. -/
 public structure Env where
+  /-- Bindings local to this frame. -/
   current : IO.Ref (Std.HashMap String MalVal)
+  /-- Parent frame; `none` for the root. -/
   outer   : Option Env
+  /-- Registration id if a closure has captured this env. -/
   idRef   : IO.Ref (Option Nat)
 
 namespace Env
