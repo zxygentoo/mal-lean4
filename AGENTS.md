@@ -29,9 +29,13 @@ Mark only what's actually called from outside the file as `public`. New
 declarations start private; promote `private → public` when an external
 caller appears, demote when the last caller goes away.
 
-Every `public` declaration in the library needs a doc comment, enforced by
-`linter.missingDocs` (configured in `lakefile.toml`, library scope only).
-Silence the linter by writing the docstring, never by toggling it off.
+## Comments
+
+Default to no comment. Write one only when the *why* isn't visible in the
+code — a hidden constraint, a subtle invariant, a workaround, surprising
+behavior. Don't restate what a well-named identifier already says, and
+don't write docstrings just to satisfy a linter (we deliberately don't
+enable `linter.missingDocs` in lib modules).
 
 ## Imports
 

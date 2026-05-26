@@ -3,57 +3,43 @@ module
 public import MalLean4.Types
 public import Std.Data.HashMap.Basic
 
-set_option linter.missingDocs true
-
 open Types
 
-/-- A mal evaluation environment: a chain of frames, each holding a mutable
-`HashMap` of bindings. `def!` updates the innermost frame in place via the
-`IO.Ref`. `idRef` is set to `some n` once the env is `register`-ed (so
-`GC.markEnv` can mark `n` as reachable when it walks the env); transient
-envs created by `Env.new` and never captured by a `fn*` keep it as
-`none`. -/
+-- A chain of frames, each holding a mutable `HashMap`. `def!` updates
+-- the innermost frame in place. `idRef` is set once the env is
+-- `register`-ed so `GC.markEnv` can mark its slot reachable; transient
+-- envs from `Env.new` never captured by a `fn*` stay `none`.
 public structure Env where
-  /-- Bindings local to this frame. -/
   current : IO.Ref (Std.HashMap String MalVal)
-  /-- Parent frame; `none` for the root. -/
   outer   : Option Env
-  /-- Registration id if a closure has captured this env. -/
   idRef   : IO.Ref (Option Nat)
 
 namespace Env
 
-/-- Backing store for env handles. `Lambda.outerEnvId` indexes into this
-table so the env reference doesn't appear directly inside `MalVal` (which
-would break strict positivity, same shape as `Atoms.store`). Entries
-become `none` after `GC.run` collects them. -/
+-- `Lambda.outerEnvId` indexes here instead of holding an `Env`
+-- directly — same strict-positivity workaround as `Atoms.store`.
+-- Entries become `none` after `GC.run` collects them.
 public initialize store : IO.Ref (Array (Option Env)) ← IO.mkRef #[]
 
-/-- `store.size` at the most recent sweep. -/
 public initialize lastSweepSize : IO.Ref Nat ← IO.mkRef 0
 
-/-- Set to `true` when `register` notices we've accumulated more than
-`threshold` new entries since `lastSweepSize`; cleared after `GC.run`.
-`maybeRun`'s hot path is just a `Bool` read. -/
+-- Set by `register` once we've accumulated more than `threshold` new
+-- entries since `lastSweepSize`; cleared by `GC.run`. Keeps
+-- `maybeRun`'s hot path to a single `Bool` read.
 public initialize shouldSweep : IO.Ref Bool ← IO.mkRef false
 
-/-- Number of new `store` entries between automatic sweeps. -/
 public def threshold : Nat := 1000
 
-/-- One-way flag: set to `true` by `Env.set` / `Env.newWithBindings` when
-they bind `DEBUG-EVAL` in any frame. While `false`, `Debug.trace` skips
-the env-chain walk entirely — saving an O(depth) lookup on every
-`evalLoop` iteration in benchmark code that never touches the trace
-hook. Never cleared: once set, the env walk takes over and correctly
-returns `none` for the not-currently-bound case (an out-of-scope
-`DEBUG-EVAL` binding). -/
+-- One-way flag: `true` once anything has ever bound `DEBUG-EVAL`. While
+-- `false`, `Debug.trace` skips the env walk entirely — an O(depth) win
+-- on every `evalLoop` iteration in benchmark code that never trips the
+-- hook. Never cleared: the env walk takes over and correctly returns
+-- `none` for an out-of-scope `DEBUG-EVAL` binding.
 public initialize debugEvalMaybeBound : IO.Ref Bool ← IO.mkRef false
 
-/-- Stash `env` in the registry and return its handle. Also writes the
-assigned id into `env.idRef` so `GC.markEnv` can mark the slot reachable
-when it walks `env` (or any env that chains to it). The post-push
-delta-vs-`lastSweepSize` check sets `shouldSweep` once per cycle; most
-registrations are a read + compare, no write. -/
+-- Files `env` in the registry, writes the id into `env.idRef` (so
+-- `GC.markEnv` can mark the slot reachable), and trips `shouldSweep`
+-- once per cycle when the threshold is crossed.
 public def register (env : Env) : IO Nat := do
   let arr ← store.get
   let id := arr.size
@@ -63,9 +49,8 @@ public def register (env : Env) : IO Nat := do
     shouldSweep.set true
   return id
 
-/-- Look up the env at `id`. Panics if the id was either never registered
-or was swept by `GC.run`; reaching either case means a `Lambda` outlived a
-reference the GC didn't see, which is a bug. -/
+-- Panics if the id was never registered or was swept — either means a
+-- `Lambda` outlived a reference the GC didn't see, which is a bug.
 public partial def lookup (id : Nat) : IO Env := do
   let arr ← store.get
   match arr[id]? with
@@ -73,24 +58,19 @@ public partial def lookup (id : Nat) : IO Env := do
   | some none       => panic! s!"Env.lookup: id {id} was garbage collected"
   | none            => panic! s!"Env.lookup: invalid id {id} (table size {arr.size})"
 
-/-- A root environment with no bindings. -/
 public def empty : IO Env := do
   let r ← IO.mkRef ∅
   let i ← IO.mkRef none
   return { current := r, outer := none, idRef := i }
 
-/-- A new nested env whose lookups fall through to `parent`. Called at
-every `let*` and lambda apply to introduce a fresh binding frame. -/
 public def new (parent : Env) : IO Env := do
   let r ← IO.mkRef ∅
   let i ← IO.mkRef none
   return { current := r, outer := some parent, idRef := i }
 
-/-- A new nested env populated with `bindings` in one ref allocation —
-avoids the N `current.modify` calls a fresh `Env.new` + repeated `set`
-would cost just to seed the frame. Used by `bindLambdaArgs` to build a
-closure frame in one pass. Flips `debugEvalMaybeBound` if any of the
-bindings is `DEBUG-EVAL`, same invariant as `set`. -/
+-- Seeds the frame in one ref allocation instead of the N `current.modify`
+-- calls a fresh `Env.new` + repeated `set` would cost. Used by
+-- `bindLambdaArgs`. Same `DEBUG-EVAL` flag invariant as `set`.
 public def newWithBindings (parent : Env)
     (bindings : Std.HashMap String MalVal) : IO Env := do
   let r ← IO.mkRef bindings
@@ -98,14 +78,12 @@ public def newWithBindings (parent : Env)
   if bindings.contains "DEBUG-EVAL" then debugEvalMaybeBound.set true
   return { current := r, outer := some parent, idRef := i }
 
-/-- Bind `k` to `v` in the innermost frame (shadows any outer binding).
-Flips `debugEvalMaybeBound` when `k = "DEBUG-EVAL"` so `Debug.trace`
-switches off its fast-path skip and starts walking the env chain. -/
+-- Trips `debugEvalMaybeBound` on `DEBUG-EVAL` so `Debug.trace` switches
+-- off its fast-path skip.
 public def set (env : Env) (k : String) (v : MalVal) : IO Unit := do
   env.current.modify (·.insert k v)
   if k == "DEBUG-EVAL" then debugEvalMaybeBound.set true
 
-/-- Look up `k` walking the entire chain. -/
 public partial def find? (env : Env) (k : String) : IO (Option MalVal) := do
   let data ← env.current.get
   match data[k]? with
@@ -115,8 +93,6 @@ public partial def find? (env : Env) (k : String) : IO (Option MalVal) := do
     | some o => o.find? k
     | none   => return none
 
-/-- The root frame (`outer = none`). `(eval …)` and `(load-file …)` use
-this to evaluate in the root env regardless of call site. -/
 public partial def root (env : Env) : Env :=
   match env.outer with
   | none   => env

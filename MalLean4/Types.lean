@@ -1,14 +1,9 @@
 module
 
-set_option linter.missingDocs true
-
 namespace Types
 
 mutual
 
-/-- The mal abstract syntax tree. Every value the interpreter manipulates
-— read from input, produced by `eval`, formatted by the printer — is one
-of these constructors. -/
 public inductive MalVal where
   | nil
   | bool : Bool → MalVal
@@ -21,67 +16,46 @@ public inductive MalVal where
   | map  : List (MalVal × MalVal) → MalVal
   | fn   : Fn → MalVal
   | atom : Nat → MalVal
-  /-- `withMeta value meta`: tags `value` with metadata. The printer, type
-  predicates, equality, and most operations transparently strip this
-  wrapper; only `meta` and `with-meta` see it. -/
+  -- The printer, equality, and type predicates strip this wrapper via
+  -- `MalVal.strip`; only `meta`, `with-meta`, and `apply` see it.
   | withMeta : MalVal → MalVal → MalVal
 
-/-- A callable: either a `builtin` (resolved by name via `Core.callBuiltin`)
-or a `lambda` from `fn*` (see `Lambda`). -/
 public inductive Fn where
   | builtin : String → Fn
   | lambda  : Lambda → Fn
 
-/-- A user function created by `fn*`. The body resolves free names against
-the env stored at `fn*` time (an external `Nat` id into `Env.store`), so
-lookups follow lexical scope and `def!` updates in the closure's env
-propagate to later calls — both impossible with a value snapshot. The
-external table breaks `MalVal`'s strict-positivity cycle the same way
-`Atoms.store` does for `MalVal.atom`. -/
+-- `outerEnvId` is a `Nat` id into `Env.store`, not a direct `Env`: Lean's
+-- strict positivity rejects `Lambda { outerEnv : Env }` because `Env`
+-- chains back through `MalVal`. The indirection also gives us lexical
+-- scope and live `def!` updates that a value snapshot couldn't.
 public structure Lambda where
   public mk ::
-  /-- True when bound via `defmacro!`; eval expands macro calls before
-  applying. -/
   public isMacro  : Bool := false
-  /-- Positional parameter names. -/
   public params   : List String
-  /-- Optional rest-parameter name bound by `&` to a list of remaining args. -/
   public restParam : Option String := none
-  /-- Unevaluated body form; `apply` evaluates this against a fresh frame
-  whose outer chain leads to `outerEnvId`. -/
   public body     : MalVal
-  /-- Id of the env at `fn*` time, looked up via `Env.lookup outerEnvId`. -/
   public outerEnvId : Nat
 
 end
 
-/-- The eval monad: IO for builtins like `prn`, with `MalVal`-typed errors
-so user-thrown values (from `throw`) can be caught structurally by `try*`.
-Uses `EIO MalVal` (one-layer error shape) rather than `ExceptT MalVal IO`
-(two-layer) to halve the per-bind dispatch cost. -/
+-- `EIO MalVal` not `ExceptT MalVal IO`: one-layer error shape halves
+-- per-bind dispatch cost. `MalVal`-typed errors let `try*` catch
+-- user-thrown values structurally.
 public abbrev MalIO := EIO MalVal
 
-/-- Auto-coerce `String` to `MalVal` so existing `throw (.str "...")` sites keep
-working after the error channel switched from `String` to `MalVal`. -/
 public instance : Coe String MalVal := ⟨MalVal.str⟩
 
-/-- Lift `IO α` into `MalIO α`, converting Lean's `IO.Error` into a `MalVal`
-string. Allows existing `IO.println`, `IO.FS.readFile`, etc. calls to work
-inside the `MalIO` monad. -/
 public instance : MonadLift IO MalIO where
   monadLift m := EIO.adapt (fun e => MalVal.str s!"{e}") m
 
-/-- Mal's truthiness: only `nil` and `false` are falsy. Everything else
-(including 0, the empty list, and the empty string) is truthy. -/
+-- Only `nil` and `false` are falsy; 0, "", and `()` are truthy.
 public def MalVal.isTruthy : MalVal → Bool
   | .nil        => false
   | .bool false => false
   | _ => true
 
-/-- Structural equality on `MalVal`. Strips meta wrappers from both sides.
-Lists and vectors compare element-wise and are equal across constructors;
-maps compare as unordered key-value sets; atoms by identity (Nat id), so
-two `(atom 0)` calls produce non-equal values. -/
+-- Strips meta from both sides. Lists and vectors compare equal across
+-- constructors; maps as unordered key-value sets; atoms by id.
 public partial def MalVal.equal (a b : MalVal) : Bool :=
   match a, b with
   | .withMeta v _, _ => MalVal.equal v b
@@ -111,47 +85,38 @@ where
         | some (_, v') => MalVal.equal v v'
         | none         => false
 
-/-- Strip the outermost (`withMeta`) wrapper if present, otherwise return
-`v` unchanged. Most operations call this before pattern-matching the value
-so that metadata is invisible to them. -/
 public def MalVal.strip : MalVal → MalVal
   | .withMeta v _ => v.strip
   | v             => v
 
-/-- Return the metadata attached to `v`, or `nil` if none. -/
 public def MalVal.getMeta : MalVal → MalVal
   | .withMeta _ m => m
   | _             => .nil
 
-/-- True if `v` is a sequence (list or vector). -/
 public def MalVal.isSequential : MalVal → Bool
   | .list _ => true
   | .vec _  => true
   | .withMeta v _ => v.isSequential
   | _       => false
 
-/-- Extract the underlying elements of a list or vector. -/
 public def MalVal.toList? : MalVal → Option (List MalVal)
   | .list xs       => some xs
   | .vec xs        => some xs
   | .withMeta v _  => v.toList?
   | _              => none
 
-/-- Public accessor: true if `l` is bound as a macro. The new module system
-keeps structure field projections private even when fields are declared
-`public`, so cross-module callers reach for this wrapper. -/
+-- The new module system keeps structure field projections private even
+-- when fields are declared `public`, so cross-module callers need these
+-- wrappers.
 public def Lambda.isMacro? (l : Lambda) : Bool := l.isMacro
-
-/-- Public accessor: id of the env captured at `fn*` time. -/
 public def Lambda.outerId (l : Lambda) : Nat := l.outerEnvId
 
-/-- A default `MalVal` so partial list operations (`getLast!`, `head!`) can
-type-check. The contents are irrelevant — these operations are only called
-on lists we've already checked to be non-empty. -/
+-- Needed so partial list operations (`getLast!`, `head!`) type-check;
+-- value irrelevant.
 public instance : Inhabited MalVal := ⟨.nil⟩
 
-/-- Deduplicate hash-map entries, last-write-wins. Used to keep map literals
-and `hash-map`/`assoc` results free of duplicate keys. -/
+-- Last-write-wins. Keeps map literals and `hash-map`/`assoc` results
+-- free of duplicate keys.
 public def MalVal.dedupMap (pairs : List (MalVal × MalVal)) :
     List (MalVal × MalVal) :=
   pairs.foldl (fun acc (k, v) =>

@@ -2,20 +2,17 @@ module
 
 public import MalLean4.Types
 
-set_option linter.missingDocs true
-
 open Types
 
 namespace Reader
 
 def isSeparator (c : Char) : Bool := " \t\n\r,".contains c
 
-/-- Characters that always tokenize as a single-char token on their own. -/
 def isStandalone (c : Char) : Bool := "()[]{}'`~^@".contains c
 
-/-- Characters that end the current token. Beyond the standalone tokens, the
-tokenizer also handles `;` (comment) and `"` (string literal) before the
-standalone-char branch — they're listed here so `isTokenChar` excludes them. -/
+-- `;` and `"` get their own branches in `tokenize` before the
+-- standalone-char branch; they're listed here so `isTokenChar` excludes
+-- them.
 def isSpecial (c : Char) : Bool :=
   isStandalone c || c == ';' || c == '"'
 
@@ -97,11 +94,9 @@ mutual
     .ok (.list [.sym name, form], rest)
 end
 
-/-- Read a string literal's body into a token. Returns `(token, rest)`.
-The token always starts with `"`; it ends with a matching `"` for a
-well-formed literal, or with `EOF` (no closing quote) so the parser can
-emit an "unbalanced string" / end-of-input error rather than silently
-accepting a truncated string. -/
+-- Returns the token (always starting with `"`) and the rest of the
+-- input. An unterminated literal returns with no closing quote so the
+-- parser can emit "unbalanced string" rather than silently accept it.
 partial def readStringToken (chars : List Char) (acc : List Char) :
     String × List Char :=
   match chars with
@@ -127,12 +122,8 @@ where
         let (taken, rest') := (c :: rest).span isTokenChar
         String.ofList taken :: go rest'
 
-/-- Parse a single mal form from `s`.
-
-Returns `.ok none` for inputs that contain only whitespace or comments,
-`.ok (some form)` for a parsed expression, or `.error msg` on a parse failure
-(e.g., unbalanced parentheses).
--/
+-- `.ok none` for whitespace/comment-only input; `.ok (some form)` for a
+-- parsed expression; `.error msg` for parse failures.
 public def readStr (s : String) : Except String (Option MalVal) := do
   match tokenize s with
   | [] => .ok none

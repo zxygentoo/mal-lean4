@@ -3,14 +3,11 @@ module
 public import MalLean4.Types
 public import MalLean4.Atoms
 
-set_option linter.missingDocs true
-
 open Types
 
 namespace Printer
 
-/-- Re-escape mal's string-literal escapes for output (readable form).
-Inverse of the reader's `unescape`. -/
+-- Inverse of the reader's `unescape`.
 def escapeStr (s : String) : String :=
   s.toList.foldl
     (fun acc c =>
@@ -21,9 +18,8 @@ def escapeStr (s : String) : String :=
         | c    => String.singleton c))
     ""
 
-/-- Core formatter parameterized by string-rendering mode. With `readably`
-true, strings are quoted and escaped (round-trip form); with false, they
-render as raw contents. Non-string values render identically either way. -/
+-- `readably`: strings quoted+escaped (round-trip form) when `true`, raw
+-- when `false`. Non-string values render identically either way.
 partial def prStrAux (readably : Bool) : MalVal → IO String
   | .nil          => return "nil"
   | .bool true    => return "true"
@@ -51,11 +47,7 @@ partial def prStrAux (readably : Bool) : MalVal → IO String
     | none   => return s!"(atom #invalid:{n})"
   | .withMeta v _ => prStrAux readably v
 
-/-- Readable rendering: strings quoted+escaped. Used by `pr-str`/`prn` and
-the REPL's printed output. -/
 public def prStr : MalVal → IO String := prStrAux true
-
-/-- Unreadable rendering: strings as raw contents. Used by `str`/`println`. -/
 public def prStrUnreadably : MalVal → IO String := prStrAux false
 
 end Printer

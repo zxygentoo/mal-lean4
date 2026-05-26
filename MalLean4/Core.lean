@@ -7,16 +7,11 @@ import MalLean4.Printer
 import MalLean4.Reader
 import Std.Data.HashMap.Basic
 
-set_option linter.missingDocs true
-
 open Types
 
 namespace Core
 
-/-- Split a `fn*` parameter form into positional names plus an optional
-rest-binder. Recognises `&` as the rest-marker (a literal `&` followed by
-a single symbol). Rejects non-symbol parameters and a `&` that isn't
-followed by exactly one symbol. -/
+-- Recognises `& rest` as the rest-binder.
 public def parseParams : List MalVal → MalIO (List String × Option String)
   | [] => return ([], none)
   | .sym "&" :: .sym restName :: [] => return ([], some restName)
@@ -27,17 +22,13 @@ public def parseParams : List MalVal → MalIO (List String × Option String)
     return (p :: more, rp)
   | _ => throw (.str "fn*: parameter is not a symbol")
 
-/-- Runtime context passed to every builtin. Holds the env at the call
-site plus the step's `eval`/`apply` callbacks (`apply` is partially applied
-with `env`). Constructed inside `callBuiltin`. -/
+-- Env-aware builtins reach into this for `ctx.eval`, `ctx.apply`, or
+-- `ctx.env.root`. `apply` is partially applied with `env` by `callBuiltin`.
 structure Context where
   env   : Env
   eval  : Env → MalVal → MalIO MalVal
   apply : MalVal → List MalVal → MalIO MalVal
 
-/-- A mal builtin. Most builtins ignore the context (`fun _ args => …`);
-env-aware ones reach into it for `ctx.eval`, `ctx.apply`, or
-`ctx.env.root`. -/
 abbrev MalFn := Context → List MalVal → MalIO MalVal
 
 def intBinop (op : Int → Int → Int) : MalFn := fun _ => fun
@@ -165,10 +156,8 @@ def readline : MalFn := fun _ => fun
     | _ => throw (.str "readline: expected one string argument")
   | _ => throw (.str "readline: expected one string argument")
 
-/-- Last value returned by `time-ms`. Keeping it ensures strict
-monotonicity: a Lean call site fast enough to finish inside one wall-clock
-millisecond still observes a `>` result, which mal's `time-ms` test
-requires. -/
+-- Forces strict monotonicity for the `time-ms` test: a call fast enough
+-- to finish inside one wall-clock millisecond still returns `> prev`.
 initialize timeMsLast : IO.Ref Nat ← IO.mkRef 0
 
 def timeMs : MalFn := fun _ => fun
@@ -374,7 +363,7 @@ def rest : MalFn := fun _ => fun
     | _ => throw (.str "rest: expected a sequence or nil")
   | _ => throw (.str "rest: expected a sequence or nil")
 
-/-- Replace existing entries (by key) and append new ones, preserving order. -/
+-- Replace existing entries by key, append new ones, preserve order.
 def assocList (pairs : List (MalVal × MalVal))
     (extras : List (MalVal × MalVal)) : List (MalVal × MalVal) :=
   extras.foldl (fun acc (k, v) =>
@@ -471,7 +460,6 @@ def metaFn : MalFn := fun _ => fun
   | [v] => return v.getMeta
   | _   => throw (.str "meta: expected one argument")
 
-/-- Re-wrap `value` with the new metadata, replacing any existing wrapper. -/
 def withMeta : MalFn := fun _ => fun
   | [.withMeta v _, m] => return .withMeta v m
   | [v, m]             => return .withMeta v m
@@ -542,13 +530,11 @@ def table : List (String × MalFn) :=
     ("map",         map),
     ("nth",         nth) ]
 
-/-- `table` indexed by builtin name for O(1) dispatch. -/
 private def tableMap : Std.HashMap String MalFn :=
   table.foldl (fun m (k, v) => m.insert k v) ∅
 
-/-- Dispatch a builtin by `name` with the step's `eval`/`apply` callbacks
-(`apply` should be partially applied with the caller's env). Errors if
-`name` is not a registered builtin. -/
+-- Dispatches a builtin by name with the step's eval/apply callbacks
+-- (`apply` should be partially applied with the caller's env).
 public def callBuiltin
     (name : String)
     (env : Env)
@@ -560,8 +546,6 @@ public def callBuiltin
   | some impl => impl { env, eval, apply } args
   | none      => throw (.str s!"unknown builtin '{name}'")
 
-/-- The starting environment for the mal REPL, with every builtin bound by
-name. -/
 public def initialEnv : IO Env := do
   let env ← Env.empty
   for (name, _) in table do

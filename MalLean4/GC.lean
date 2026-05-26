@@ -4,29 +4,23 @@ public import MalLean4.Env
 public import MalLean4.Atoms
 public import Std.Data.HashSet.Basic
 
-set_option linter.missingDocs true
-
 open Types
 
 -- Mark-and-sweep over `Env.store` and `Atoms.store`. Lambdas register
--- their captured env in `Env.store`, and `MalVal.atom` references entries
--- in `Atoms.store`; both grow monotonically as the program runs, so
--- without GC they leak as fast as `fn*` and `atom` are evaluated.
---
--- `GC.run` walks live values reachable from the root env (transitively
--- through bindings, lists, vectors, maps, meta wrappers, and the
--- `outerEnvId` / atom id stored in lambdas/atoms) and `none`-s out the
--- unreached slots. The array itself still grows by one `Option` slot per
--- allocation; the heavy payload (the captured frame's `HashMap` and the
--- values it pinned) becomes collectable.
+-- their captured env there, and `MalVal.atom` references entries in
+-- `Atoms.store`; both grow monotonically, so without GC they leak as
+-- fast as `fn*` and `atom` evaluate. `run` walks values reachable from
+-- the root env and `none`-s out unreached slots — the array still grows
+-- by one `Option` per allocation, but the heavy payload (captured
+-- frame's `HashMap` and the values it pinned) becomes collectable.
 
 namespace GC
 
-/-- Stack of envs the host eval recursion is currently working with. Each
-recursive `eval` entry pushes a fresh `IO.Ref Env`, updates it as its
-mutable `env` changes, and pops on return. `GC.run` walks every env in
-this stack so closures sitting in an outer frame's `letEnv` (or any other
-non-current env) survive sweeps fired by a deeper frame's `evalDo`. -/
+-- Each recursive `eval` entry pushes a fresh `IO.Ref Env`, updates it
+-- as its mutable `env` changes, and pops on return. `GC.run` walks
+-- every env here so closures sitting in an outer frame's `letEnv` (or
+-- any other non-current env) survive sweeps fired by a deeper frame's
+-- `evalDo`.
 public initialize roots : IO.Ref (List (IO.Ref Env)) ← IO.mkRef []
 
 structure Marks where
@@ -57,8 +51,8 @@ mutual
     | _ => pure ()
 
   partial def markEnv (marks : IO.Ref Marks) (env : Env) : IO Unit := do
-    -- If this env is registered, mark its slot so it survives the sweep
-    -- even when its only outside reference is a lambda on the host stack.
+    -- Mark this env's slot so it survives a sweep when its only outside
+    -- reference is a lambda on the host stack.
     if let some id ← env.idRef.get then
       let m ← marks.get
       if !m.envs.contains id then
@@ -72,16 +66,12 @@ mutual
 
 end
 
-/-- Mark every env / atom id reachable from `root`, then `none` out the
-unreached slots in both stores. Safe to call only at points where the
-host's eval stack isn't holding values invisible to `root` — the REPL
-loop boundary and the `(gc)` builtin are both safe; calling mid-eval
-would collect intermediates still in use. -/
+-- Safe only at points where the host's eval stack isn't holding values
+-- invisible to `root` — the REPL loop boundary and `evalDo`'s
+-- between-forms gap. Calling mid-eval would collect live intermediates.
 public def run (root : Env) : IO Unit := do
   let marks ← IO.mkRef ({} : Marks)
   markEnv marks root
-  -- Walk every active eval frame's current env too — otherwise a sweep
-  -- fired by a deep frame would free envs the outer frames still need.
   for envRef in (← roots.get) do
     markEnv marks (← envRef.get)
   let m ← marks.get
@@ -91,16 +81,9 @@ public def run (root : Env) : IO Unit := do
   let atomArr ← Atoms.store.get
   Atoms.store.set (atomArr.mapIdx fun i a =>
     if m.atoms.contains i then a else none)
-  -- Reset the registration tracker; `Env.register` will set `shouldSweep`
-  -- again once `threshold` more entries accumulate.
   Env.lastSweepSize.set (← Env.store.get).size
   Env.shouldSweep.set false
 
-/-- Trigger `run` if `Env.shouldSweep` is set. Hot path is a `Bool` read.
-The flag is set by `Env.register` when the threshold is exceeded; `run`
-clears it and snapshots `lastSweepSize` after each sweep. Safe only at
-points where the host eval stack isn't holding values invisible to
-`root`. -/
 public def maybeRun (root : Env) : IO Unit := do
   if (← Env.shouldSweep.get) then run root
 
