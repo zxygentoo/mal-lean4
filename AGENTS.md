@@ -29,6 +29,20 @@ Mark only what's actually called from outside the file as `public`. New
 declarations start private; promote `private → public` when an external
 caller appears, demote when the last caller goes away.
 
+## Proofs
+
+Theorems and `example` checks live in the module that defines what they
+reason about, not in a separate proof module — in a lib module, a
+`/-! ## Proofs -/` section at the end of the file; for a `private` helper in
+a step file, beside it (e.g. `bindPositional_one_empty` in `StepAMal.lean`).
+
+Reasoning about a `def` (`simp [f]`, `rfl`, `decide`) needs its body, which
+the module system shares cross-module only behind `@[expose]`. Co-located
+proofs see private helpers and unexposed bodies for free — so never add
+`@[expose]`, or promote a helper to `public`, just to prove something about
+it elsewhere. Proofs stay module-private (the default) until another module
+actually uses them.
+
 ## Comments
 
 Default to no comment. Write one only when the *why* isn't visible in the

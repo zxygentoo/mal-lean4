@@ -76,6 +76,16 @@ def bindLambdaArgs (parent : Env) (l : Lambda)
         throw (.str s!"arity mismatch: expected {needed}, got {got}")
   Env.newWithBindings parent hm
 
+-- `bindPositional` always exhausts at least one side, so exactly one of
+-- `bindLambdaArgs`' two arity-error branches can fire — they're
+-- exhaustive, never both-or-neither.
+theorem bindPositional_one_empty :
+    ∀ (hm : Std.HashMap String MalVal) (ps : List String) (as : List MalVal),
+      (bindPositional hm ps as).2.1 = [] ∨ (bindPositional hm ps as).2.2 = []
+  | _, [],       _       => Or.inl rfl
+  | _, _ :: _,   []      => Or.inr rfl
+  | hm, p :: ps, a :: as => bindPositional_one_empty (hm.insert p a) ps as
+
 mutual
   /-- Leaf forms short-circuit; non-leaf forms enter `evalLoop` under a
   GC root push. The root is re-synced when a tail-position form rebinds
