@@ -182,3 +182,25 @@ Don't re-vendor upstream files locally — `make` reads them directly from
 directory exists for impl-specific overrides (e.g. skipping a test our
 impl can't satisfy), matching upstream's `impls/<lang>/tests/`
 convention; currently empty.
+
+## Performance
+
+`make bench` is the benchmark — `fib(25)` and `fib(28)`, three runs each,
+via `mal/tests/fib.mal` (timed with `time-ms`). Upstream `perf3.mal`
+(`iters over 10 seconds`) is also valid. Rough baselines in script mode
+(`stepA_mal`), dev machine — for spotting regressions, not absolute claims:
+
+- `fib(25)` ≈ 0.9 s/run
+- `fib(28)` ≈ 3.8 s/run
+- `perf3` ≈ 26k iters
+
+`perf1`/`perf2` finish in ~1 ms — below the measurement floor; ignore them.
+Time any ad-hoc benchmark over at least a few hundred ms so `time-ms`'s 1 ms
+integer granularity stays in the noise.
+
+`Core.timeMs` returns real monotonic ms with no forced increment, so
+`run-fn-for`/`perf3` measure real time. The cost: the *optional* upstream
+`time-ms` test (`(> (time-ms) start-time)` right after sub-ms work)
+soft-fails on fast machines. That's accepted on purpose — don't re-add a
++1 ms tick to "fix" it, since that silently caps `perf3` at a constant
+(`≈ max-ms` iterations).

@@ -59,43 +59,29 @@ The same rundir lets `mal-in-mal`'s `(load-file "../mal/env.mal")` find
 `mal/impls/mal/env.mal` (because `mal/tests` is itself a symlink to
 `mal/impls/tests`, so `..` resolves into `mal/impls/`).
 
-## Status
+## Implementation notes
 
-All 947 step tests pass — required, deferrable, and optional:
+- **GC registries grow unbounded.** Captured envs and atoms live in two
+  append-only tables (`Env.store`, `Atoms.store`) that `MalVal.atom` /
+  `Lambda` index into by `Nat` (a strict-positivity workaround). The
+  mark-and-sweep in `GC.lean` reclaims the *payloads* — the captured
+  `HashMap`s and atom cells — by nulling unreachable slots, but the tables
+  themselves never shrink; they grow one `Option` slot per allocation for
+  the life of the process.
 
-| Step              | Executable          | Tests           |
-|-------------------|---------------------|-----------------|
-| 0 — REPL          | `step0_repl`        | 24 / 24         |
-| 1 — read & print  | `step1_read_print`  | 121 / 121       |
-| 2 — eval          | `step2_eval`        | 15 / 15         |
-| 3 — environments  | `step3_env`         | 38 / 38         |
-| 4 — if/fn/do      | `step4_if_fn_do`    | 199 / 199       |
-| 5 — TCO           | `step5_tco`         | 8 / 8           |
-| 6 — file/eval     | `step6_file`        | 71 / 71         |
-| 7 — quote         | `step7_quote`       | 124 / 124       |
-| 8 — macros        | `step8_macros`      | 61 / 61         |
-| 9 — try/catch     | `step9_try`         | 173 / 173       |
-| A — mal           | `stepA_mal`         | 113 / 113       |
+- **Tail calls.** `stepA_mal`'s `eval` is a `while true` trampoline with
+  mutable `env`/`ast`; tail-position forms (`let*` body, `do` last, `if`
+  branch, lambda-application body, `quasiquote` rewrite, bare `try*`) rebind
+  the locals and continue instead of recursing on the host stack — native
+  deep tail recursion runs 10M-deep without stack growth, and `stepA` can
+  host mal-in-mal without divergence. Steps 5–9 keep a recursive `eval`;
+  Lean optimizes their monadic tail calls well enough for the test cases.
 
-The upstream library tests (`mal/tests/lib/*.mal`) also pass: 168 / 169
-against `stepA_mal`. The single failure is `memoize.mal`, which runs
-naïve `(fib 32)` (~5M calls, exponential — TCO doesn't help shape, just
-depth). Our interpreter is fast enough to handle ~1M iterations in 7.5s,
-so fib(32) needs roughly 40s and times out at the harness limit.
-
-Mal-in-mal (`make test^mal`): all 10 hosted-step suites pass (step5_tco
-is skipped — mal-in-mal doesn't ship one, TCO is the host's job),
-confirming our stepA can host mal-in-mal's mal-language interpreter
-without divergence.
-
-`stepA_mal` has real TCO — `eval` is a `while true` loop with mutable
-`env`/`ast`; tail-position forms (`let*` body, `do` last, `if` branch,
-lambda application body, `quasiquote` rewrite, bare `try*`) update the
-locals and continue. Native deep tail recursion runs 10M-deep without
-stack growth; mal-in-mal hosting (see `make repl^mal`) runs ~10k
-user-level recursions in seconds, bounded by interpretation throughput
-rather than stack. Step5–9 still use recursive eval — Lean's compiler
-optimizes their monadic tail calls well enough for the native test
-cases.
+- **`time-ms` returns real monotonic milliseconds** (no forced tick), so
+  `run-fn-for`/`perf3` and other benchmarks measure real elapsed time. The
+  trade: the upstream *optional* `time-ms` test asserts time advanced right
+  after sub-millisecond work, which can't hold at integer-ms resolution, so
+  it soft-fails on fast machines. We take honest perf numbers over a +1 ms
+  tick that passes that test but caps `perf3` at a constant.
 
 See [AGENTS.md](AGENTS.md) for project conventions.

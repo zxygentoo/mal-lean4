@@ -156,18 +156,15 @@ def readline : MalFn := fun _ => fun
     | _ => throw (.str "readline: expected one string argument")
   | _ => throw (.str "readline: expected one string argument")
 
--- Forces strict monotonicity for the `time-ms` test: a call fast enough
--- to finish inside one wall-clock millisecond still returns `> prev`.
-initialize timeMsLast : IO.Ref Nat ← IO.mkRef 0
-
+-- Real monotonic milliseconds, no forced tick — keeps `run-fn-for`/perf3
+-- honest (a forced +1 would cap them at a constant). The trade: the
+-- *optional* upstream `time-ms` test asserts time advanced right after
+-- sub-millisecond work, which can't hold at integer-ms resolution, so it
+-- soft-fails on fast machines. See AGENTS.md "Performance".
 def timeMs : MalFn := fun _ => fun
   | [] => do
     let ns ← IO.monoNanosNow
-    let ms := ns / 1000000
-    let prev ← timeMsLast.get
-    let next := if ms > prev then ms else prev + 1
-    timeMsLast.set next
-    return .int (Int.ofNat next)
+    return .int (Int.ofNat (ns / 1000000))
   | _ => throw (.str "time-ms: expected no arguments")
 
 def atom : MalFn := fun _ => fun
