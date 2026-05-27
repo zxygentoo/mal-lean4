@@ -159,15 +159,30 @@ def bindLambdaArgs (parent : Env) (l : Lambda)
         throw (.str s!"arity mismatch: expected {needed}, got {got}")
   Env.newWithBindings parent hm
 
--- `bindPositional` always exhausts at least one side, so exactly one of
--- `bindLambdaArgs`' two arity-error branches can fire — they're
--- exhaustive, never both-or-neither.
-theorem bindPositional_one_empty :
+-- Each leftover's length is exactly the arity gap on its side — so
+-- `bindLambdaArgs`' `got = needed - leftoverParams.length` is the smaller of
+-- the two lengths.
+theorem bindPositional_leftover_lengths :
     ∀ (hm : Std.HashMap String MalVal) (ps : List String) (as : List MalVal),
-      (bindPositional hm ps as).2.1 = [] ∨ (bindPositional hm ps as).2.2 = []
-  | _, [],       _       => Or.inl rfl
-  | _, _ :: _,   []      => Or.inr rfl
-  | hm, p :: ps, a :: as => bindPositional_one_empty (hm.insert p a) ps as
+      (bindPositional hm ps as).2.1.length = ps.length - as.length
+    ∧ (bindPositional hm ps as).2.2.length = as.length - ps.length
+  | _, [],       _       => by simp [bindPositional]
+  | _, _ :: _,   []      => by simp [bindPositional]
+  | hm, p :: ps, a :: as => by
+    obtain ⟨ih1, ih2⟩ := bindPositional_leftover_lengths (hm.insert p a) ps as
+    simp only [bindPositional, List.length_cons]
+    omega
+
+-- `bindPositional` always exhausts at least one side (one gap is `0`), so
+-- exactly one of `bindLambdaArgs`' two arity-error branches can fire — they're
+-- exhaustive, never both-or-neither. Corollary of the leftover lengths.
+theorem bindPositional_one_empty (hm : Std.HashMap String MalVal)
+    (ps : List String) (as : List MalVal) :
+    (bindPositional hm ps as).2.1 = [] ∨ (bindPositional hm ps as).2.2 = [] := by
+  obtain ⟨h1, h2⟩ := bindPositional_leftover_lengths hm ps as
+  rcases Nat.le_total ps.length as.length with h | h
+  · exact Or.inl (List.length_eq_zero_iff.mp (by omega))
+  · exact Or.inr (List.length_eq_zero_iff.mp (by omega))
 
 mutual
   /-- Leaf forms short-circuit; non-leaf forms enter `evalLoop` under a

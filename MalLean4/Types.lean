@@ -237,6 +237,35 @@ private theorem dedupMap_keys_pairwise (ps : List (MalVal × MalVal)) :
   rw [dedupMap_eq]
   exact dstep_pairwise ps [] (by simp)
 
+-- Folding `dstep` over a list whose keys are already pairwise-distinct just
+-- appends each entry (no merge ever fires), leaving the list unchanged.
+private theorem foldl_dstep_append : ∀ (acc L : List (MalVal × MalVal)),
+    ((acc ++ L).map Prod.fst).Pairwise (fun a b => ¬ MalVal.equal b a) →
+    L.foldl dstep acc = acc ++ L
+  | acc, [],           _ => by simp
+  | acc, (k, v) :: xs, h => by
+    have h' : (acc.map Prod.fst ++ (k :: xs.map Prod.fst)).Pairwise
+        (fun a b => ¬ MalVal.equal b a) := by simpa using h
+    have hcross := (List.pairwise_append.mp h').2.2
+    have hno : acc.any (fun p => MalVal.equal k p.1) = false := by
+      cases hcase : acc.any (fun p => MalVal.equal k p.1) with
+      | false => rfl
+      | true =>
+        rw [List.any_eq_true] at hcase
+        obtain ⟨p, hp, hpk⟩ := hcase
+        exact absurd hpk (hcross p.1 (List.mem_map_of_mem hp) k List.mem_cons_self)
+    rw [List.foldl_cons, show dstep acc (k, v) = acc ++ [(k, v)] by simp [dstep, hno]]
+    rw [foldl_dstep_append (acc ++ [(k, v)]) xs (by simpa [List.append_assoc] using h)]
+    simp [List.append_assoc]
+
+-- `dedupMap` is idempotent: its output already has distinct keys, so
+-- re-deduping appends each entry unchanged.
+private theorem dedupMap_idem (ps : List (MalVal × MalVal)) :
+    MalVal.dedupMap (MalVal.dedupMap ps) = MalVal.dedupMap ps := by
+  rw [dedupMap_eq (MalVal.dedupMap ps),
+      foldl_dstep_append [] (MalVal.dedupMap ps) (by simpa using dedupMap_keys_pairwise ps),
+      List.nil_append]
+
 /-! Reflexivity of `equal`. Not unconditional: a function never `equal`s
 anything (even itself), and a *duplicate-key* map compares its later entry
 against an earlier entry's value. So `=` is reflexive exactly on the "data
@@ -432,6 +461,27 @@ private theorem toList?_strip : ∀ v : MalVal, v.strip.toList? = v.toList?
     simp only [MalVal.strip, MalVal.toList?]; exact toList?_strip v
   | .nil | .bool _ | .int _ | .str _ | .kw _ | .sym _
   | .atom _ | .list _ | .vec _ | .map _ | .fn _ => by simp [MalVal.strip]
+
+/-! ### Type-predicate consistency
+
+`isSequential` and `toList?` decide the same thing (both unwrap meta and accept
+exactly `list`/`vec`), and a sequence is always truthy. -/
+
+private theorem isSequential_eq_isSome_toList? : ∀ v : MalVal,
+    v.isSequential = v.toList?.isSome
+  | .withMeta v _ => by
+    simp only [MalVal.isSequential, MalVal.toList?]; exact isSequential_eq_isSome_toList? v
+  | .nil | .bool _ | .int _ | .str _ | .kw _ | .sym _
+  | .map _ | .fn _ | .atom _ | .list _ | .vec _ => rfl
+
+private theorem isTruthy_of_isSequential : ∀ v : MalVal,
+    v.isSequential = true → v.isTruthy = true
+  | .withMeta v _, h => by
+    simp only [MalVal.isSequential] at h
+    simp only [MalVal.isTruthy]; exact isTruthy_of_isSequential v h
+  | .list _, _ | .vec _, _ => rfl
+  | .nil, h | .bool _, h | .int _, h | .str _, h | .kw _, h
+  | .sym _, h | .map _, h | .fn _, h | .atom _, h => by simp [MalVal.isSequential] at h
 
 /-! ### Symmetry of `equal`
 
