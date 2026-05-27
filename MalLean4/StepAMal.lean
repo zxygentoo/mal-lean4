@@ -26,6 +26,89 @@ mutual
       | _ => .list [.sym "cons", quasiquote x, rest]
 end
 
+/-! ## Proofs: quasiquote round-trip
+
+`quasiquote` is a pure AST rewrite; `eval` of its output is opaque (IO), but
+the *skeleton* it emits (`cons`/`vec`/`quote`/`list`) can be run by a pure
+evaluator `qqEval`. On the marker-free fragment (no `unquote`/`splice-unquote`)
+the rewrite is invertible: `qqEval (quasiquote v) = v` — the pure analog of the
+reader's `readForm_printTokens` round-trip. -/
+
+-- Underlying element list of a sequence (for `cons`/`vec` reconstruction).
+private def asList : MalVal → List MalVal
+  | .list xs => xs
+  | .vec xs  => xs
+  | _        => []
+
+-- Pure evaluator for the quasiquote skeleton: `quote` returns its arg, `cons`
+-- prepends, `vec` re-wraps; leaves are self-evaluating.
+private def qqEval : MalVal → MalVal
+  | .list [.sym "quote", x]   => x
+  | .list [.sym "vec",   x]   => .vec (asList (qqEval x))
+  | .list [.sym "cons", a, b] => .list (qqEval a :: asList (qqEval b))
+  | other                     => other
+
+-- The two reader-macro forms quasiquote treats specially (and so does not
+-- reconstruct verbatim); the round-trip holds where neither occurs.
+private def isUnquoteForm : List MalVal → Bool
+  | [.sym "unquote", _] => true
+  | _                   => false
+
+private def isSpliceForm : MalVal → Bool
+  | .list [.sym "splice-unquote", _] => true
+  | _                                => false
+
+mutual
+private def markerFree : MalVal → Bool
+  | .list xs => !isUnquoteForm xs && markerFreeList xs
+  | .vec xs  => markerFreeList xs
+  | _        => true
+private def markerFreeList : List MalVal → Bool
+  | []      => true
+  | x :: xs => !isSpliceForm x && markerFree x && markerFreeList xs
+end
+
+-- A non-`unquote` list takes quasiquote's reconstructing branch.
+private theorem qq_list (xs : List MalVal) (h : isUnquoteForm xs = false) :
+    quasiquote (.list xs) = quasiquoteList xs := by
+  unfold quasiquote
+  split <;> first | rfl | (rename_i heq; simp_all [isUnquoteForm])
+
+-- A non-`splice-unquote` element takes quasiquoteList's `cons` branch.
+private theorem qq_cons (x : MalVal) (xs : List MalVal) (h : isSpliceForm x = false) :
+    quasiquoteList (x :: xs) = .list [.sym "cons", quasiquote x, quasiquoteList xs] := by
+  simp only [quasiquoteList]
+  split <;> first | rfl | (rename_i heq; simp_all [isSpliceForm])
+
+-- The round-trip: on the marker-free fragment, `qqEval` inverts `quasiquote`.
+-- A `quasiquoteList` skeleton evaluates to exactly the list it was built from.
+mutual
+private theorem rt : ∀ v : MalVal, markerFree v = true → qqEval (quasiquote v) = v
+  | .nil, _ | .bool _, _ | .int _, _ | .str _, _ | .kw _, _
+  | .sym _, _ | .map _, _ | .fn _, _ | .atom _, _ | .withMeta _ _, _ => by
+    simp [quasiquote, qqEval]
+  | .list xs, h => by
+    simp only [markerFree, Bool.and_eq_true] at h
+    rw [qq_list xs (by simpa using h.1)]; exact rtl xs h.2
+  | .vec xs, h => by
+    simp only [markerFree] at h
+    simp only [quasiquote, qqEval]; rw [rtl xs h]; simp only [asList]
+private theorem rtl : ∀ xs : List MalVal, markerFreeList xs = true →
+    qqEval (quasiquoteList xs) = .list xs
+  | [],      _ => by simp [quasiquoteList, qqEval]
+  | x :: xs, h => by
+    simp only [markerFreeList, Bool.and_eq_true] at h
+    obtain ⟨⟨h1, h2⟩, h3⟩ := h
+    rw [qq_cons x xs (by simpa using h1)]; simp only [qqEval]
+    rw [rt x h2, rtl xs h3]; simp only [asList]
+end
+
+-- Round-trip on a nested marker-free value (a list holding a vector and a map).
+example :
+    qqEval (quasiquote (.list [.vec [.int 1], .map [(.kw "k", .int 2)], .sym "s"]))
+  = .list [.vec [.int 1], .map [(.kw "k", .int 2)], .sym "s"] :=
+  rt _ (by decide)
+
 def lookupSym (env : Env) (s : String) : MalIO MalVal := do
   match ← env.find? s with
   | some v => return v
