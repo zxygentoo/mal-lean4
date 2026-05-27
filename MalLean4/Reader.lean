@@ -131,4 +131,29 @@ public def readStr (s : String) : Except String (Option MalVal) := do
     let (form, _) ← readForm toks
     .ok (some form)
 
+/-! ## Proofs
+
+`readAtom` parses each canonical token form back to the value the printer
+emits for it. (`readAtom` is private, so these live here.) -/
+
+theorem readAtom_nil   : readAtom "nil"   = .ok .nil          := rfl
+theorem readAtom_true  : readAtom "true"  = .ok (.bool true)  := rfl
+theorem readAtom_false : readAtom "false" = .ok (.bool false) := rfl
+
+-- A `:kw` token round-trips to the keyword (the printer emits `":" ++ s`).
+theorem readAtom_kw (s : String) : readAtom (":" ++ s) = .ok (.kw s) := by
+  simp [readAtom, String.ofList_toList]
+
+-- An integer token routes to `.int`: given that it's a numeral (so the
+-- `"`/`:`/`nil`/`true`/`false` branches don't fire) and that Lean's
+-- `toInt?` parses it. That second fact — `toString n` round-tripping
+-- through `toInt?` — is about Lean's stdlib decimal codec (whose parse side
+-- ships no lemmas), so it's taken as a hypothesis rather than reproved.
+theorem readAtom_int (t : String) (n : Int) (c : Char) (cs : List Char)
+    (htl : t.toList = c :: cs) (hq : c ≠ '"') (hcl : c ≠ ':')
+    (hnil : t ≠ "nil") (htrue : t ≠ "true") (hfalse : t ≠ "false")
+    (hi : t.toInt? = some n) : readAtom t = .ok (.int n) := by
+  simp only [readAtom, htl]
+  split <;> simp_all
+
 end Reader
