@@ -814,6 +814,11 @@ private theorem mapFree_strip : ∀ v : MalVal, mapFree v.strip = mapFree v
   | .nil | .bool _ | .int _ | .str _ | .kw _ | .sym _
   | .atom _ | .list _ | .vec _ | .map _ | .fn _ => by simp [MalVal.strip]
 
+private theorem reflEq_strip : ∀ v : MalVal, reflEq v.strip = reflEq v
+  | .withMeta v _ => by simp only [MalVal.strip, reflEq]; exact reflEq_strip v
+  | .nil | .bool _ | .int _ | .str _ | .kw _ | .sym _
+  | .atom _ | .list _ | .vec _ | .map _ | .fn _ => by simp [MalVal.strip]
+
 -- Sequence transitivity given elementwise transitivity (length-mismatched
 -- combinations are vacuous: `listEqual` is `false` there).
 private theorem listEqual_trans : ∀ (xs ys zs : List MalVal),
@@ -1010,5 +1015,541 @@ example
     simp only [List.mem_cons, List.not_mem_nil, or_false] at hp hq hr
     rcases hp with rfl | rfl <;> rcases hq with rfl | rfl <;> rcases hr with rfl | rfl <;>
       simp_all [MalVal.equal]
+
+/-! ### Symmetry & transitivity on distinct-key maps (arbitrary keys)
+
+The scalar-key results above lean on `equalScalar_iff` (`equal k k' ↔ k = k'`),
+free transitivity. For arbitrary keys (lists, even maps) that crutch is gone:
+the map cases need `equal` to be an equivalence *on the keys* — but keys are
+strictly smaller than the map, so a single well-founded induction on size proves
+symmetry and transitivity together, the map arms drawing on the IH for keys and
+values. These size helpers feed that induction's bookkeeping. -/
+
+-- A key/value sits strictly inside its map.
+private theorem sizeOf_entry_lt {xs : List (MalVal × MalVal)} {p : MalVal × MalVal}
+    (h : p ∈ xs) :
+    sizeOf p.1 < sizeOf (MalVal.map xs) ∧ sizeOf p.2 < sizeOf (MalVal.map xs) := by
+  have hm := List.sizeOf_lt_of_mem h
+  obtain ⟨k, v⟩ := p
+  simp only [MalVal.map.sizeOf_spec, Prod.mk.sizeOf_spec] at hm ⊢
+  omega
+
+-- Two entries at distinct positions of a list have total size below the list's.
+private theorem sizeOf_two_lt {α} [SizeOf α] : ∀ (l : List α) (a b : α),
+    a ∈ l → b ∈ l → a ≠ b → sizeOf a + sizeOf b < sizeOf l
+  | [],      _, _, ha, _,  _   => by simp at ha
+  | x :: xs, a, b, ha, hb, hab => by
+    simp only [List.mem_cons] at ha hb
+    simp only [List.cons.sizeOf_spec]
+    rcases ha with rfl | ha <;> rcases hb with rfl | hb
+    · exact absurd rfl hab
+    · have := List.sizeOf_lt_of_mem hb; omega
+    · have := List.sizeOf_lt_of_mem ha; omega
+    · have := sizeOf_two_lt xs a b ha hb hab; omega
+
+-- Three entries at distinct positions have total size below the list's.
+private theorem sizeOf_three_lt {α} [SizeOf α] : ∀ (l : List α) (a b c : α),
+    a ∈ l → b ∈ l → c ∈ l → a ≠ b → a ≠ c → b ≠ c →
+    sizeOf a + sizeOf b + sizeOf c < sizeOf l
+  | [],      _, _, _, ha, _,  _,  _,   _,   _   => by simp at ha
+  | x :: xs, a, b, c, ha, hb, hc, hab, hac, hbc => by
+    simp only [List.mem_cons] at ha hb hc
+    simp only [List.cons.sizeOf_spec]
+    rcases ha with rfl | ha <;> rcases hb with rfl | hb <;> rcases hc with rfl | hc
+    · exact absurd rfl hab
+    · exact absurd rfl hab
+    · exact absurd rfl hac
+    · have := sizeOf_two_lt xs b c hb hc hbc; omega
+    · exact absurd rfl hbc
+    · have := sizeOf_two_lt xs a c ha hc hac; omega
+    · have := sizeOf_two_lt xs a b ha hb hab; omega
+    · have := sizeOf_three_lt xs a b c ha hb hc hab hac hbc; omega
+
+-- `sizeOf` is subadditive over append (the trailing `[]` is shared).
+private theorem sizeOf_append_le {α} [SizeOf α] : ∀ (l₁ l₂ : List α),
+    sizeOf (l₁ ++ l₂) ≤ sizeOf l₁ + sizeOf l₂
+  | [],      l₂ => by simp only [List.nil_append, List.nil.sizeOf_spec]; omega
+  | _ :: xs, l₂ => by
+    simp only [List.cons_append, List.cons.sizeOf_spec]
+    have := sizeOf_append_le xs l₂; omega
+
+-- `agree → lookup`: with distinct keys and the key-compatibility fact `hcompat`
+-- (two `ys`-keys both `equal` to `k` are themselves `equal`), a lookup of `k`
+-- succeeds whenever *some* `(k', u) ∈ ys` agrees with it. `hcompat` forces the
+-- first key-match to be that unique agreeing entry. (The `∃`→`mapEqual`
+-- direction that transitivity needs.)
+private theorem mapLookup_true_of_agree :
+    ∀ (ys : List (MalVal × MalVal)) (k v k' u : MalVal),
+      (k', u) ∈ ys → MalVal.equal k k' = true → MalVal.equal v u = true →
+      keysDistinct ys = true →
+      (∀ p ∈ ys, ∀ q ∈ ys, MalVal.equal k p.1 = true → MalVal.equal k q.1 = true →
+        MalVal.equal q.1 p.1 = true) →
+      MalVal.mapLookup k v ys = true
+  | [],             _, _, _,  _, hmem, _,    _,   _,  _       => by simp at hmem
+  | (j, w) :: rest, k, v, k', u, hmem, hkk', hvu, hd, hcompat => by
+    simp only [MalVal.mapLookup]
+    simp only [keysDistinct, Bool.and_eq_true] at hd
+    by_cases hkj : MalVal.equal k j = true
+    · rw [if_pos hkj]
+      rcases List.mem_cons.mp hmem with heq | hrest
+      · simp only [Prod.mk.injEq] at heq; obtain ⟨rfl, rfl⟩ := heq; exact hvu
+      · exfalso
+        have hnk'j : MalVal.equal k' j = false := by
+          have := (List.all_eq_true.mp hd.1) (k', u) hrest; simpa using this
+        have hk'j : MalVal.equal k' j = true :=
+          hcompat (j, w) List.mem_cons_self (k', u) (List.mem_cons_of_mem _ hrest) hkj hkk'
+        rw [hk'j] at hnk'j; exact Bool.noConfusion hnk'j
+    · rw [if_neg hkj]
+      rcases List.mem_cons.mp hmem with heq | hrest
+      · simp only [Prod.mk.injEq] at heq; obtain ⟨rfl, rfl⟩ := heq
+        exact absurd hkk' hkj
+      · exact mapLookup_true_of_agree rest k v k' u hrest hkk' hvu hd.2
+          (fun p hp q hq => hcompat p (List.mem_cons_of_mem _ hp) q (List.mem_cons_of_mem _ hq))
+
+-- Transitivity of the map comparison (arbitrary keys): chase each `xs` entry
+-- forward to its `ys` match, then to `zs`, and compose keys and values. Only
+-- `zs` need be distinct (its lookup is the one pinned). The key/value
+-- transitivity and `zs` key-compatibility come from the outer induction.
+private theorem mapEqual_trans_gen (xs ys zs : List (MalVal × MalVal))
+    (hdz : keysDistinct zs = true)
+    (hvtr : ∀ p ∈ xs, ∀ q ∈ ys, ∀ r ∈ zs,
+      MalVal.equal p.2 q.2 = true → MalVal.equal q.2 r.2 = true → MalVal.equal p.2 r.2 = true)
+    (hktr : ∀ p ∈ xs, ∀ q ∈ ys, ∀ r ∈ zs,
+      MalVal.equal p.1 q.1 = true → MalVal.equal q.1 r.1 = true → MalVal.equal p.1 r.1 = true)
+    (hzc : ∀ p ∈ xs, ∀ a ∈ zs, ∀ b ∈ zs,
+      MalVal.equal p.1 a.1 = true → MalVal.equal p.1 b.1 = true → MalVal.equal b.1 a.1 = true)
+    (h1 : MalVal.mapEqual ys xs = true) (h2 : MalVal.mapEqual zs ys = true) :
+    MalVal.mapEqual zs xs = true := by
+  rw [mapEqual_eq_true_iff] at h1 h2 ⊢
+  intro p hp
+  obtain ⟨k, v⟩ := p
+  obtain ⟨k₁, w, hw, hk1, hvw⟩ := mapLookup_mem ys k v (h1 (k, v) hp)
+  obtain ⟨k₂, x, hx, hk2, hwx⟩ := mapLookup_mem zs k₁ w (h2 (k₁, w) hw)
+  have hkk2 := hktr (k, v) hp (k₁, w) hw (k₂, x) hx hk1 hk2
+  have hvx  := hvtr (k, v) hp (k₁, w) hw (k₂, x) hx hvw hwx
+  exact mapLookup_true_of_agree zs k v k₂ x hx hkk2 hvx hdz (hzc (k, v) hp)
+
+-- Erasing the `k`-keyed entry leaves a lookup of a separated key `q` untouched.
+-- `hsep` (no `k`-keyed entry is `equal`-to `q`) is the caller's key-transitivity
+-- consequence of `¬ equal q k`.
+private theorem mapLookup_eraseP_ne_gen : ∀ (ys : List (MalVal × MalVal)) (k q v : MalVal),
+    (∀ p ∈ ys, MalVal.equal p.1 k = true → MalVal.equal q p.1 = false) →
+    MalVal.mapLookup q v (ys.eraseP (fun p => MalVal.equal p.1 k))
+      = MalVal.mapLookup q v ys
+  | [],             _, _, _, _    => by simp [MalVal.mapLookup]
+  | (j, w) :: rest, k, q, v, hsep => by
+    have ih := mapLookup_eraseP_ne_gen rest k q v
+      (fun p hp => hsep p (List.mem_cons_of_mem _ hp))
+    by_cases hjk : MalVal.equal j k = true
+    · have hqj : MalVal.equal q j = false := hsep (j, w) List.mem_cons_self hjk
+      simp [hjk, MalVal.mapLookup, hqj]
+    · have hjk' : MalVal.equal j k = false := by simpa using hjk
+      simp [hjk', MalVal.mapLookup, ih]
+
+-- In a distinct-key list, two entries with `equal` keys must be the same entry
+-- (distinct positions carry non-`equal` keys), so their values coincide. Needs
+-- key symmetry to rule out the head/tail crossings.
+private theorem keysDistinct_eq_of_equal_key :
+    ∀ (ys : List (MalVal × MalVal)) (a va b vb : MalVal),
+      (∀ p ∈ ys, ∀ q ∈ ys, MalVal.equal p.1 q.1 = MalVal.equal q.1 p.1) →
+      keysDistinct ys = true → (a, va) ∈ ys → (b, vb) ∈ ys →
+      MalVal.equal a b = true → va = vb
+  | [],               _, _,  _, _,  _,    _,  ha, _,  _   => by simp at ha
+  | (h, vh) :: rest, a, va, b, vb, hsym, hd, ha, hb, hab => by
+    simp only [keysDistinct, Bool.and_eq_true] at hd
+    rcases List.mem_cons.mp ha with hae | har <;> rcases List.mem_cons.mp hb with hbe | hbr
+    · simp only [Prod.mk.injEq] at hae hbe; rw [hae.2, hbe.2]
+    · exfalso
+      have hnbh := (List.all_eq_true.mp hd.1) (b, vb) hbr
+      have hs := hsym (b, vb) (List.mem_cons_of_mem _ hbr) (h, vh) List.mem_cons_self
+      simp only [Prod.mk.injEq] at hae; obtain ⟨rfl, -⟩ := hae
+      simp_all
+    · exfalso
+      have hnah := (List.all_eq_true.mp hd.1) (a, va) har
+      have hs := hsym (a, va) (List.mem_cons_of_mem _ har) (h, vh) List.mem_cons_self
+      simp only [Prod.mk.injEq] at hbe; obtain ⟨rfl, -⟩ := hbe
+      simp_all
+    · exact keysDistinct_eq_of_equal_key rest a va b vb
+        (fun p hp q hq => hsym p (List.mem_cons_of_mem _ hp) q (List.mem_cons_of_mem _ hq))
+        hd.2 har hbr hab
+
+-- The symmetry crux for arbitrary keys: if every `xs` entry is found in `ys`,
+-- then with equal lengths and distinct keys every `ys` entry is found in `xs`.
+-- Induct on `xs`, erasing the matched entry from `ys`; key symmetry/transitivity
+-- (over `xs ++ ys`, from the outer induction) replace the scalar `k = k'`.
+private theorem mapEqual_transfer_gen : ∀ (xs ys : List (MalVal × MalVal)),
+    keysDistinct xs = true → keysDistinct ys = true → xs.length = ys.length →
+    (∀ p ∈ xs, ∀ q ∈ ys, MalVal.equal p.2 q.2 = MalVal.equal q.2 p.2) →
+    (∀ a ∈ xs ++ ys, ∀ b ∈ xs ++ ys, MalVal.equal a.1 b.1 = MalVal.equal b.1 a.1) →
+    (∀ a ∈ xs ++ ys, ∀ b ∈ xs ++ ys, ∀ c ∈ xs ++ ys,
+      MalVal.equal a.1 b.1 = true → MalVal.equal b.1 c.1 = true → MalVal.equal a.1 c.1 = true) →
+    MalVal.mapEqual ys xs = true → MalVal.mapEqual xs ys = true
+  | [],            ys, _, _, hlen, _, _, _, _ => by
+    cases ys with
+    | nil      => simp [MalVal.mapEqual]
+    | cons _ _ => simp at hlen
+  | (k, v) :: xs', ys, hdx, hdy, hlen, hvsym, Ksym, Ktr, hme => by
+    rw [mapEqual_eq_true_iff] at hme
+    obtain ⟨k', u, hmem0, hkk', hvu⟩ := mapLookup_mem ys k v (hme (k, v) List.mem_cons_self)
+    have memk  : (k, v) ∈ (k, v) :: xs' ++ ys := List.mem_append.mpr (Or.inl List.mem_cons_self)
+    have memk' : (k', u) ∈ (k, v) :: xs' ++ ys := List.mem_append.mpr (Or.inr hmem0)
+    have hk'k : MalVal.equal k' k = true := (Ksym (k, v) memk (k', u) memk').symm.trans hkk'
+    have hPk'u : (fun p => MalVal.equal p.1 k) (k', u) = true := hk'k
+    simp only [keysDistinct, Bool.and_eq_true] at hdx
+    have hdy' := keysDistinct_eraseP (fun p => MalVal.equal p.1 k) ys hdy
+    have hlen' : xs'.length = (ys.eraseP (fun p => MalVal.equal p.1 k)).length := by
+      have he := List.length_eraseP_of_mem (p := fun p => MalVal.equal p.1 k) hmem0 hPk'u
+      simp only [List.length_cons] at hlen; omega
+    -- lift membership in the smaller lists back to `xs ++ ys`
+    have lift : ∀ x, x ∈ xs' ++ ys.eraseP (fun p => MalVal.equal p.1 k) →
+        x ∈ (k, v) :: xs' ++ ys := fun x hx => by
+      rcases List.mem_append.mp hx with h | h
+      · exact List.mem_append.mpr (Or.inl (List.mem_cons_of_mem _ h))
+      · exact List.mem_append.mpr (Or.inr (List.mem_of_mem_eraseP h))
+    have hme' : MalVal.mapEqual (ys.eraseP (fun p => MalVal.equal p.1 k)) xs' = true := by
+      rw [mapEqual_eq_true_iff]; intro p hp
+      have hpk : MalVal.equal p.1 k = false := by
+        have := (List.all_eq_true.mp hdx.1) p hp; simpa using this
+      have hsep : ∀ e ∈ ys, MalVal.equal e.1 k = true → MalVal.equal p.1 e.1 = false := by
+        intro e he hek
+        cases hcon : MalVal.equal p.1 e.1 with
+        | false => rfl
+        | true =>
+          have := Ktr p (List.mem_append.mpr (Or.inl (List.mem_cons_of_mem _ hp)))
+            e (List.mem_append.mpr (Or.inr he)) (k, v) memk hcon hek
+          rw [this] at hpk; exact Bool.noConfusion hpk
+      rw [mapLookup_eraseP_ne_gen ys k p.1 p.2 hsep]
+      exact hme p (List.mem_cons_of_mem _ hp)
+    have ihres := mapEqual_transfer_gen xs' (ys.eraseP (fun p => MalVal.equal p.1 k))
+      hdx.2 hdy' hlen'
+      (fun p hp q hq => hvsym p (List.mem_cons_of_mem _ hp) q (List.mem_of_mem_eraseP hq))
+      (fun a ha b hb => Ksym a (lift a ha) b (lift b hb))
+      (fun a ha b hb c hc => Ktr a (lift a ha) b (lift b hb) c (lift c hc))
+      hme'
+    rw [mapEqual_eq_true_iff] at ihres ⊢
+    intro q hq; obtain ⟨j, uq⟩ := q
+    simp only [MalVal.mapLookup]
+    by_cases hjk : MalVal.equal j k = true
+    · rw [if_pos hjk]
+      have memj : (j, uq) ∈ (k, v) :: xs' ++ ys := List.mem_append.mpr (Or.inr hq)
+      have hjk' : MalVal.equal j k' = true := Ktr (j, uq) memj (k, v) memk (k', u) memk' hjk hkk'
+      have huq : uq = u := keysDistinct_eq_of_equal_key ys j uq k' u
+        (fun p hp r hr => Ksym p (List.mem_append.mpr (Or.inr hp)) r (List.mem_append.mpr (Or.inr hr)))
+        hdy hq hmem0 hjk'
+      subst uq
+      rw [hvsym (k, v) List.mem_cons_self (k', u) hmem0] at hvu
+      exact hvu
+    · rw [if_neg hjk]
+      have hjk' : MalVal.equal j k = false := by simpa using hjk
+      exact ihres (j, uq) ((List.mem_eraseP_of_neg (by simp [hjk'])).mpr hq)
+
+-- `mapEqual` is symmetric on distinct-key lists of equal length: transfer in
+-- both directions (hypotheses are symmetric under swapping the lists).
+private theorem mapEqual_symm_gen (xs ys : List (MalVal × MalVal))
+    (hdx : keysDistinct xs = true) (hdy : keysDistinct ys = true) (hlen : xs.length = ys.length)
+    (hvsym : ∀ p ∈ xs, ∀ q ∈ ys, MalVal.equal p.2 q.2 = MalVal.equal q.2 p.2)
+    (Ksym : ∀ a ∈ xs ++ ys, ∀ b ∈ xs ++ ys, MalVal.equal a.1 b.1 = MalVal.equal b.1 a.1)
+    (Ktr : ∀ a ∈ xs ++ ys, ∀ b ∈ xs ++ ys, ∀ c ∈ xs ++ ys,
+      MalVal.equal a.1 b.1 = true → MalVal.equal b.1 c.1 = true → MalVal.equal a.1 c.1 = true) :
+    MalVal.mapEqual ys xs = MalVal.mapEqual xs ys := by
+  have swap : ∀ x, x ∈ ys ++ xs → x ∈ xs ++ ys :=
+    fun x hx => List.mem_append.mpr (List.mem_append.mp hx).symm
+  have t1 := mapEqual_transfer_gen xs ys hdx hdy hlen hvsym Ksym Ktr
+  have t2 := mapEqual_transfer_gen ys xs hdy hdx hlen.symm
+    (fun p hp q hq => (hvsym q hq p hp).symm)
+    (fun a ha b hb => Ksym a (swap a ha) b (swap b hb))
+    (fun a ha b hb c hc => Ktr a (swap a ha) b (swap b hb) c (swap c hc))
+  cases h1 : MalVal.mapEqual ys xs
+  · cases h2 : MalVal.mapEqual xs ys
+    · rfl
+    · exact absurd (t2 h2) (by simp [h1])
+  · cases h2 : MalVal.mapEqual xs ys
+    · exact absurd (t1 h1) (by simp [h2])
+    · rfl
+
+-- Supplying the bridges' key hypotheses from the outer IH. Keys of the two maps
+-- are `reflEq` and (pairwise) strictly smaller than the maps, so the size-bounded
+-- IH covers them; repeated keys are handled directly (symmetry reflexive,
+-- transitivity degenerate). `sizeOf_append_le` + the distinct-element bounds turn
+-- "smaller than the maps" into the exact measure the IH needs.
+private theorem keySymm_supply (xs ys : List (MalVal × MalVal))
+    (hr : ∀ p ∈ xs ++ ys, reflEq p.1 = true)
+    (IHs : ∀ a b, sizeOf a + sizeOf b < sizeOf (MalVal.map xs) + sizeOf (MalVal.map ys) →
+      reflEq a = true → reflEq b = true → MalVal.equal a b = MalVal.equal b a) :
+    ∀ a ∈ xs ++ ys, ∀ b ∈ xs ++ ys, MalVal.equal a.1 b.1 = MalVal.equal b.1 a.1 := by
+  intro a ha b hb
+  obtain ⟨a1, a2⟩ := a; obtain ⟨b1, b2⟩ := b
+  by_cases hab : a1 = b1
+  · rw [hab]
+  · apply IHs a1 b1 _ (hr _ ha) (hr _ hb)
+    have h2 := sizeOf_two_lt (xs ++ ys) (a1, a2) (b1, b2) ha hb
+      (fun h => hab (congrArg Prod.fst h))
+    have hap := sizeOf_append_le xs ys
+    simp only [MalVal.map.sizeOf_spec, Prod.mk.sizeOf_spec] at h2 ⊢
+    omega
+
+private theorem keyTrans_supply (xs ys : List (MalVal × MalVal))
+    (hr : ∀ p ∈ xs ++ ys, reflEq p.1 = true)
+    (IHt : ∀ a b c, sizeOf a + sizeOf b + sizeOf c < sizeOf (MalVal.map xs) + sizeOf (MalVal.map ys) →
+      reflEq a = true → reflEq b = true → reflEq c = true →
+      MalVal.equal a b = true → MalVal.equal b c = true → MalVal.equal a c = true) :
+    ∀ a ∈ xs ++ ys, ∀ b ∈ xs ++ ys, ∀ c ∈ xs ++ ys,
+      MalVal.equal a.1 b.1 = true → MalVal.equal b.1 c.1 = true → MalVal.equal a.1 c.1 = true := by
+  intro a ha b hb c hc hab hbc
+  obtain ⟨a1, a2⟩ := a; obtain ⟨b1, b2⟩ := b; obtain ⟨c1, c2⟩ := c
+  by_cases h1 : a1 = b1
+  · rw [h1]; exact hbc
+  · by_cases h2 : b1 = c1
+    · rw [← h2]; exact hab
+    · by_cases h3 : a1 = c1
+      · rw [← h3]; exact equal_refl a1 (hr _ ha)
+      · refine IHt a1 b1 c1 ?_ (hr _ ha) (hr _ hb) (hr _ hc) hab hbc
+        have h3' := sizeOf_three_lt (xs ++ ys) (a1, a2) (b1, b2) (c1, c2) ha hb hc
+          (fun h => h1 (congrArg Prod.fst h)) (fun h => h3 (congrArg Prod.fst h))
+          (fun h => h2 (congrArg Prod.fst h))
+        have hap := sizeOf_append_le xs ys
+        simp only [MalVal.map.sizeOf_spec, Prod.mk.sizeOf_spec] at h3' ⊢
+        omega
+
+-- Map-level symmetry/transitivity (length handling around the `mapEqual` core),
+-- the general-key analogues of `equal_map_symm`/`equal_map_trans`.
+private theorem equal_map_symm_gen (xs ys : List (MalVal × MalVal))
+    (hdx : keysDistinct xs = true) (hdy : keysDistinct ys = true)
+    (hvsym : ∀ p ∈ xs, ∀ q ∈ ys, MalVal.equal p.2 q.2 = MalVal.equal q.2 p.2)
+    (Ksym : ∀ a ∈ xs ++ ys, ∀ b ∈ xs ++ ys, MalVal.equal a.1 b.1 = MalVal.equal b.1 a.1)
+    (Ktr : ∀ a ∈ xs ++ ys, ∀ b ∈ xs ++ ys, ∀ c ∈ xs ++ ys,
+      MalVal.equal a.1 b.1 = true → MalVal.equal b.1 c.1 = true → MalVal.equal a.1 c.1 = true) :
+    MalVal.equal (.map xs) (.map ys) = MalVal.equal (.map ys) (.map xs) := by
+  simp only [MalVal.equal]
+  by_cases hlen : xs.length = ys.length
+  · rw [mapEqual_symm_gen xs ys hdx hdy hlen hvsym Ksym Ktr, beq_symm]
+  · rw [beq_eq_false_iff_ne.mpr hlen, beq_eq_false_iff_ne.mpr (Ne.symm hlen)]; simp
+
+private theorem equal_map_trans_gen (xs ys zs : List (MalVal × MalVal))
+    (hdz : keysDistinct zs = true)
+    (hvtr : ∀ p ∈ xs, ∀ q ∈ ys, ∀ r ∈ zs,
+      MalVal.equal p.2 q.2 = true → MalVal.equal q.2 r.2 = true → MalVal.equal p.2 r.2 = true)
+    (hktr : ∀ p ∈ xs, ∀ q ∈ ys, ∀ r ∈ zs,
+      MalVal.equal p.1 q.1 = true → MalVal.equal q.1 r.1 = true → MalVal.equal p.1 r.1 = true)
+    (hzc : ∀ p ∈ xs, ∀ a ∈ zs, ∀ b ∈ zs,
+      MalVal.equal p.1 a.1 = true → MalVal.equal p.1 b.1 = true → MalVal.equal b.1 a.1 = true)
+    (h1 : MalVal.equal (.map xs) (.map ys) = true) (h2 : MalVal.equal (.map ys) (.map zs) = true) :
+    MalVal.equal (.map xs) (.map zs) = true := by
+  simp only [MalVal.equal, Bool.and_eq_true] at h1 h2 ⊢
+  obtain ⟨hlen1, hme1⟩ := h1
+  obtain ⟨hlen2, hme2⟩ := h2
+  refine ⟨?_, mapEqual_trans_gen xs ys zs hdz hvtr hktr hzc hme1 hme2⟩
+  rw [beq_iff_eq] at hlen1 hlen2 ⊢; omega
+
+-- A `map`-headed `equal` pins the other side (up to meta) to a `map`.
+private theorem equal_map_strip (xs : List (MalVal × MalVal)) (v : MalVal)
+    (h : MalVal.equal (.map xs) v = true) :
+    ∃ ys, v.strip = .map ys ∧ MalVal.equal (.map xs) (.map ys) = true := by
+  have h' : MalVal.equal (.map xs) v.strip = true := by rw [equal_strip_right_full]; exact h
+  have hnm := strip_no_meta v
+  cases hsv : v.strip with
+  | map ys        => exact ⟨ys, rfl, by rw [hsv] at h'; exact h'⟩
+  | withMeta a b  => exact absurd hsv (hnm _ _)
+  | _             => rw [hsv] at h'; simp [MalVal.equal] at h'
+
+-- One symmetry step over the `reflEq` fragment (`equal_symm_step` plus the map
+-- arm). Functions are excluded by `reflEq`; the map arm draws key
+-- symmetry/transitivity and value symmetry from the recursion hypotheses.
+private theorem equal_symm_step_refl (a b : MalVal)
+    (hrec_symm : ∀ x y, sizeOf x + sizeOf y < sizeOf a + sizeOf b →
+      reflEq x = true → reflEq y = true → MalVal.equal x y = MalVal.equal y x)
+    (hrec_trans : ∀ x y z, sizeOf x + sizeOf y + sizeOf z < sizeOf a + sizeOf b →
+      reflEq x = true → reflEq y = true → reflEq z = true →
+      MalVal.equal x y = true → MalVal.equal y z = true → MalVal.equal x z = true)
+    (ra : reflEq a = true) (rb : reflEq b = true) :
+    MalVal.equal a b = MalVal.equal b a := by
+  cases a <;> cases b <;>
+    first
+      | (simp only [MalVal.equal] <;> first | rfl | exact beq_symm _ _)
+      | (simp [reflEq] at ra; done)
+      | (simp [reflEq] at rb; done)
+      | (simp [MalVal.equal]; done)
+      | (simp only [MalVal.equal]
+         refine listEqual_symm _ _ (fun x hx y hy => hrec_symm x y ?_
+           (reflEqList_iff.mp (by simpa only [reflEq] using ra) x hx)
+           (reflEqList_iff.mp (by simpa only [reflEq] using rb) y hy))
+         have h₁ := List.sizeOf_lt_of_mem hx
+         have h₂ := List.sizeOf_lt_of_mem hy
+         simp only [MalVal.list.sizeOf_spec, MalVal.vec.sizeOf_spec]; omega)
+      | (simp only [MalVal.equal, equal_strip_right]
+         refine hrec_symm _ _ ?_ (by simp_all [reflEq]) (by simp_all [reflEq])
+         simp only [MalVal.withMeta.sizeOf_spec]; omega)
+      | (rename_i xs ys
+         have hx : keysDistinct xs = true ∧ reflEqPairs xs = true := by
+           simpa only [reflEq, Bool.and_eq_true] using ra
+         have hy : keysDistinct ys = true ∧ reflEqPairs ys = true := by
+           simpa only [reflEq, Bool.and_eq_true] using rb
+         have hr : ∀ p ∈ xs ++ ys, reflEq p.1 = true := fun p hp =>
+           (List.mem_append.mp hp).elim (fun h => (reflEqPairs_iff.mp hx.2 p h).1)
+             (fun h => (reflEqPairs_iff.mp hy.2 p h).1)
+         exact equal_map_symm_gen xs ys hx.1 hy.1
+           (fun p hp q hq => hrec_symm p.2 q.2
+             (by have := (sizeOf_entry_lt hp).2; have := (sizeOf_entry_lt hq).2; omega)
+             (reflEqPairs_iff.mp hx.2 p hp).2 (reflEqPairs_iff.mp hy.2 q hq).2)
+           (keySymm_supply xs ys hr hrec_symm)
+           (keyTrans_supply xs ys hr hrec_trans))
+
+-- One transitivity step over the `reflEq` fragment (`equal_trans_step` plus the
+-- map arm). Cases only on `a`, reading `b`/`c` off the premises via the shape
+-- lemmas; the map arm pins both to maps and composes via `equal_map_trans_gen`.
+private theorem equal_trans_step_refl (a b c : MalVal)
+    (hrec_symm : ∀ x y, sizeOf x + sizeOf y < sizeOf a + sizeOf b + sizeOf c →
+      reflEq x = true → reflEq y = true → MalVal.equal x y = MalVal.equal y x)
+    (hrec_trans : ∀ x y z, sizeOf x + sizeOf y + sizeOf z < sizeOf a + sizeOf b + sizeOf c →
+      reflEq x = true → reflEq y = true → reflEq z = true →
+      MalVal.equal x y = true → MalVal.equal y z = true → MalVal.equal x z = true)
+    (ra : reflEq a = true) (rb : reflEq b = true) (rc : reflEq c = true)
+    (h1 : MalVal.equal a b = true) (h2 : MalVal.equal b c = true) :
+    MalVal.equal a c = true := by
+  cases a <;>
+    first
+      | (simp only [reflEq] at ra; exact Bool.noConfusion ra)
+      | (simp only [MalVal.equal] at h1 ⊢
+         exact hrec_trans _ b c (by simp only [MalVal.withMeta.sizeOf_spec]; omega)
+           (by simpa only [reflEq] using ra) rb rc h1 h2)
+      | (have hbs := equal_scalar_strip _ b (by rfl) h1
+         rw [equal_strip b c, hbs] at h2
+         have hcs := equal_scalar_strip _ c.strip (by rfl) h2
+         rw [strip_idem] at hcs
+         rw [equal_strip _ c, hcs]; simp only [MalVal.strip]
+         exact (equalScalar_iff (by rfl) (by rfl)).mpr rfl)
+      | (try rw [equal_vec_list] at h1 ⊢
+         obtain ⟨ys, hys, hxy⟩ := equal_seq_strip _ b h1
+         have hlc : MalVal.equal (.list ys) c.strip = true := by
+           rw [equal_strip] at h2
+           rcases hys with hys | hys <;> rw [hys] at h2
+           · exact h2
+           · rwa [← equal_vec_list]
+         obtain ⟨zs, hzs, hyz⟩ := equal_seq_strip _ c.strip hlc
+         simp only [strip_idem] at hzs
+         have hbsz := sizeOf_strip_le b
+         have hcsz := sizeOf_strip_le c
+         have hys_sz : sizeOf ys < sizeOf b.strip := by
+           rcases hys with h | h <;> rw [h] <;>
+             simp only [MalVal.list.sizeOf_spec, MalVal.vec.sizeOf_spec] <;> omega
+         have hzs_sz : sizeOf zs < sizeOf c.strip := by
+           rcases hzs with h | h <;> rw [h] <;>
+             simp only [MalVal.list.sizeOf_spec, MalVal.vec.sizeOf_spec] <;> omega
+         have hry : reflEqList ys = true := by
+           have h := reflEq_strip b; rw [rb] at h
+           rcases hys with hh | hh <;> rw [hh] at h <;> simpa [reflEq] using h
+         have hrz : reflEqList zs = true := by
+           have h := reflEq_strip c; rw [rc] at h
+           rcases hzs with hh | hh <;> rw [hh] at h <;> simpa [reflEq] using h
+         rw [← equal_strip_right_full]
+         rcases hzs with hzs | hzs <;> rw [hzs] <;>
+           (simp only [MalVal.equal]
+            exact listEqual_trans _ ys zs
+              (fun x hx y hy z hz hxy' hyz' => hrec_trans x y z (by
+                have hx' := List.sizeOf_lt_of_mem hx
+                have hy' := List.sizeOf_lt_of_mem hy
+                have hz' := List.sizeOf_lt_of_mem hz
+                simp only [MalVal.list.sizeOf_spec, MalVal.vec.sizeOf_spec]; omega)
+                (reflEqList_iff.mp (by simpa only [reflEq] using ra) x hx)
+                (reflEqList_iff.mp hry y hy) (reflEqList_iff.mp hrz z hz)
+                hxy' hyz') hxy hyz))
+      | (rename_i xs
+         obtain ⟨ys, hys, hb1⟩ := equal_map_strip xs b h1
+         have hyc : MalVal.equal (.map ys) c.strip = true := by
+           rw [equal_strip] at h2; rw [hys] at h2; exact h2
+         obtain ⟨zs, hzs, hb2⟩ := equal_map_strip ys c.strip hyc
+         rw [strip_idem] at hzs
+         have hrxs : keysDistinct xs = true ∧ reflEqPairs xs = true := by
+           simpa only [reflEq, Bool.and_eq_true] using ra
+         have hrys : keysDistinct ys = true ∧ reflEqPairs ys = true := by
+           have h := reflEq_strip b; rw [rb] at h; rw [hys] at h
+           simpa only [reflEq, Bool.and_eq_true] using h
+         have hrzs : keysDistinct zs = true ∧ reflEqPairs zs = true := by
+           have h := reflEq_strip c; rw [rc] at h; rw [hzs] at h
+           simpa only [reflEq, Bool.and_eq_true] using h
+         have hszys : sizeOf (MalVal.map ys) ≤ sizeOf b := by rw [← hys]; exact sizeOf_strip_le b
+         have hszzs : sizeOf (MalVal.map zs) ≤ sizeOf c := by rw [← hzs]; exact sizeOf_strip_le c
+         have hle : sizeOf (MalVal.map xs) + sizeOf (MalVal.map zs) ≤
+             sizeOf (MalVal.map xs) + sizeOf b + sizeOf c := by omega
+         have hr_xz : ∀ p ∈ xs ++ zs, reflEq p.1 = true := fun p hp =>
+           (List.mem_append.mp hp).elim (fun h => (reflEqPairs_iff.mp hrxs.2 p h).1)
+             (fun h => (reflEqPairs_iff.mp hrzs.2 p h).1)
+         have Ksym_xz := keySymm_supply xs zs hr_xz
+           (fun x y hlt rx ry => hrec_symm x y (by omega) rx ry)
+         have Ktr_xz := keyTrans_supply xs zs hr_xz
+           (fun x y z hlt rx ry rz => hrec_trans x y z (by omega) rx ry rz)
+         rw [← equal_strip_right_full, hzs]
+         refine equal_map_trans_gen xs ys zs hrzs.1 ?_ ?_ ?_ hb1 hb2
+         · exact fun p hp q hq r hr h1' h2' => hrec_trans p.2 q.2 r.2 (by
+             have := (sizeOf_entry_lt hp).2; have := (sizeOf_entry_lt hq).2
+             have := (sizeOf_entry_lt hr).2; omega)
+             (reflEqPairs_iff.mp hrxs.2 p hp).2 (reflEqPairs_iff.mp hrys.2 q hq).2
+             (reflEqPairs_iff.mp hrzs.2 r hr).2 h1' h2'
+         · exact fun p hp q hq r hr h1' h2' => hrec_trans p.1 q.1 r.1 (by
+             have := (sizeOf_entry_lt hp).1; have := (sizeOf_entry_lt hq).1
+             have := (sizeOf_entry_lt hr).1; omega)
+             (reflEqPairs_iff.mp hrxs.2 p hp).1 (reflEqPairs_iff.mp hrys.2 q hq).1
+             (reflEqPairs_iff.mp hrzs.2 r hr).1 h1' h2'
+         · exact fun p hp a' ha' b' hb' h1' h2' =>
+             Ktr_xz b' (List.mem_append.mpr (Or.inr hb')) p (List.mem_append.mpr (Or.inl hp))
+               a' (List.mem_append.mpr (Or.inr ha'))
+               ((Ksym_xz p (List.mem_append.mpr (Or.inl hp)) b'
+                 (List.mem_append.mpr (Or.inr hb'))).symm.trans h2') h1')
+
+-- The capstone: symmetry and transitivity proven together by strong induction on
+-- size. Each step's map arm needs the other property on the (strictly smaller)
+-- keys, so they cannot be separated — the conjunction is the fixed point.
+private theorem equal_symm_trans : ∀ (n : Nat),
+    (∀ a b, sizeOf a + sizeOf b ≤ n → reflEq a = true → reflEq b = true →
+      MalVal.equal a b = MalVal.equal b a) ∧
+    (∀ a b c, sizeOf a + sizeOf b + sizeOf c ≤ n →
+      reflEq a = true → reflEq b = true → reflEq c = true →
+      MalVal.equal a b = true → MalVal.equal b c = true → MalVal.equal a c = true) := by
+  intro n
+  induction n using Nat.strongRecOn with
+  | _ n IH =>
+    refine ⟨fun a b hsz ra rb => ?_, fun a b c hsz ra rb rc h1 h2 => ?_⟩
+    · exact equal_symm_step_refl a b
+        (fun x y hlt rx ry => (IH (sizeOf x + sizeOf y) (by omega)).1 x y (Nat.le_refl _) rx ry)
+        (fun x y z hlt rx ry rz hxy hyz =>
+          (IH (sizeOf x + sizeOf y + sizeOf z) (by omega)).2 x y z (Nat.le_refl _) rx ry rz hxy hyz)
+        ra rb
+    · exact equal_trans_step_refl a b c
+        (fun x y hlt rx ry => (IH (sizeOf x + sizeOf y) (by omega)).1 x y (Nat.le_refl _) rx ry)
+        (fun x y z hlt rx ry rz hxy hyz =>
+          (IH (sizeOf x + sizeOf y + sizeOf z) (by omega)).2 x y z (Nat.le_refl _) rx ry rz hxy hyz)
+        ra rb rc h1 h2
+
+-- `equal` is symmetric on the whole reflexive fragment — including maps with
+-- arbitrary (list/map) keys, not just scalar ones.
+private theorem equal_symm_full (a b : MalVal) (ra : reflEq a = true) (rb : reflEq b = true) :
+    MalVal.equal a b = MalVal.equal b a :=
+  (equal_symm_trans (sizeOf a + sizeOf b)).1 a b (Nat.le_refl _) ra rb
+
+-- ...and transitive. With reflexivity (`equal_refl`), `equal` is an equivalence
+-- relation on `reflEq` values.
+private theorem equal_trans_full (a b c : MalVal)
+    (ra : reflEq a = true) (rb : reflEq b = true) (rc : reflEq c = true)
+    (h1 : MalVal.equal a b = true) (h2 : MalVal.equal b c = true) :
+    MalVal.equal a c = true :=
+  (equal_symm_trans (sizeOf a + sizeOf b + sizeOf c)).2 a b c (Nat.le_refl _) ra rb rc h1 h2
+
+-- Symmetry/transitivity now reach maps with *non-scalar* keys (here, list keys),
+-- reordered — beyond `equal_map_symm`/`equal_map_trans`'s scalar-key fragment.
+private def mLists : MalVal := .map [(.list [.int 1], .str "a"), (.list [.int 2], .str "b")]
+private def mLists' : MalVal := .map [(.list [.int 2], .str "b"), (.list [.int 1], .str "a")]
+
+example : MalVal.equal mLists mLists' = MalVal.equal mLists' mLists :=
+  equal_symm_full _ _
+    (by simp [mLists, reflEq, keysDistinct, reflEqPairs, reflEqList, MalVal.equal, MalVal.listEqual])
+    (by simp [mLists', reflEq, keysDistinct, reflEqPairs, reflEqList, MalVal.equal, MalVal.listEqual])
+
+example (h1 : MalVal.equal mLists mLists' = true) (h2 : MalVal.equal mLists' mLists = true) :
+    MalVal.equal mLists mLists = true :=
+  equal_trans_full _ _ _
+    (by simp [mLists, reflEq, keysDistinct, reflEqPairs, reflEqList, MalVal.equal, MalVal.listEqual])
+    (by simp [mLists', reflEq, keysDistinct, reflEqPairs, reflEqList, MalVal.equal, MalVal.listEqual])
+    (by simp [mLists, reflEq, keysDistinct, reflEqPairs, reflEqList, MalVal.equal, MalVal.listEqual])
+    h1 h2
 
 end Types
