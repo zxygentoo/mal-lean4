@@ -549,4 +549,69 @@ public def initialEnv : IO Env := do
     env.set name (.fn (.builtin name))
   return env
 
+/-! ## Proofs
+
+`assocList`/`dissocList` are the pure, total cores of the `assoc`/`dissoc`
+builtins (the builtins wrap them in `MalIO`, hence are opaque). `MalVal.equal`
+stays opaque throughout — these are facts about the surrounding list algebra,
+not about equality's semantics. -/
+
+private theorem dissocList_nil (pairs : List (MalVal × MalVal)) :
+    dissocList pairs [] = pairs := by
+  simp [dissocList]
+
+-- An entry survives `dissoc` iff its key equals none of the removed keys.
+private theorem dissocList_mem (pairs : List (MalVal × MalVal)) (keys : List MalVal)
+    (p : MalVal × MalVal) :
+    p ∈ dissocList pairs keys ↔ p ∈ pairs ∧ ∀ k ∈ keys, MalVal.equal p.1 k = false := by
+  simp [dissocList, List.mem_filter, List.any_eq_false]
+
+-- Correctness: every surviving key is unequal to every removed key.
+private theorem dissocList_removed (pairs : List (MalVal × MalVal)) (keys : List MalVal) :
+    ∀ p ∈ dissocList pairs keys, ∀ k ∈ keys, MalVal.equal p.1 k = false :=
+  fun _ hp k hk => ((dissocList_mem _ _ _).mp hp).2 k hk
+
+-- Removing the same keys twice removes no more than removing them once.
+private theorem dissocList_idem (pairs : List (MalVal × MalVal)) (keys : List MalVal) :
+    dissocList (dissocList pairs keys) keys = dissocList pairs keys := by
+  unfold dissocList
+  rw [List.filter_filter]; simp
+
+private theorem dissocList_length_le (pairs : List (MalVal × MalVal)) (keys : List MalVal) :
+    (dissocList pairs keys).length ≤ pairs.length :=
+  List.length_filter_le _ _
+
+private theorem assocList_nil (pairs : List (MalVal × MalVal)) :
+    assocList pairs [] = pairs := rfl
+
+-- assoc never shrinks the map: each step replaces a key in place (`map`,
+-- length-preserving) or appends a fresh one.
+private theorem assocList_length_ge (pairs extras : List (MalVal × MalVal)) :
+    pairs.length ≤ (assocList pairs extras).length := by
+  unfold assocList
+  induction extras generalizing pairs with
+  | nil => simp
+  | cons e es ih =>
+    rw [List.foldl_cons]
+    refine Nat.le_trans ?_ (ih _)
+    split          -- destructure the `(k, v)` step argument
+    split          -- replace-in-place vs. append
+    · simp [List.length_map]
+    · simp
+
+-- ...and grows by at most one entry per extra (the dual bound): together,
+-- `pairs.length ≤ (assocList …).length ≤ pairs.length + extras.length`.
+private theorem assocList_length_le (pairs extras : List (MalVal × MalVal)) :
+    (assocList pairs extras).length ≤ pairs.length + extras.length := by
+  unfold assocList
+  induction extras generalizing pairs with
+  | nil => simp
+  | cons e es ih =>
+    rw [List.foldl_cons, List.length_cons]
+    refine Nat.le_trans (ih _) ?_
+    split          -- destructure the `(k, v)` step argument
+    split          -- replace-in-place vs. append
+    · simp only [List.length_map]; omega
+    · simp only [List.length_append, List.length_cons, List.length_nil]; omega
+
 end Core
