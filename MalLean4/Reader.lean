@@ -174,10 +174,11 @@ theorem readAtom_int (t : String) (n : Int) (c : Char) (cs : List Char)
 /-! ### Parser round-trip
 
 `readForm` inverts a token-level printer on the "literal" fragment —
-`nil`/`bool` and nested lists/vectors. (Leaf atoms `int`/`sym`/`kw` would
-each need a "token ≠ every special token" dispatch lemma, and `int`/`str`
-add stdlib-codec/escaping caveats; addable later. This is the recursive
-heart: the parser reconstructs nested structure from the token stream.) -/
+`nil`/`bool`/`kw` and nested lists/vectors. (The remaining leaf atoms
+`int`/`sym` would each need their own "token ≠ every special token" dispatch
+lemma, and `int`/`str` add stdlib-codec/escaping caveats; addable later.
+This is the recursive heart: the parser reconstructs nested structure from
+the token stream.) -/
 
 -- Token-level printer for the fragment (the string printer composed with a
 -- correct tokenizer would produce these tokens).
@@ -197,9 +198,9 @@ end
 
 mutual
 private def isLit : MalVal → Bool
-  | .nil | .bool _     => true
-  | .list xs | .vec xs => isLitList xs
-  | _                  => false
+  | .nil | .bool _ | .kw _ => true
+  | .list xs | .vec xs     => isLitList xs
+  | _                      => false
 private def isLitList : List MalVal → Bool
   | []      => true
   | x :: xs => isLit x && isLitList xs
@@ -224,9 +225,23 @@ private theorem printTokens_head (v : MalVal) (hl : isLit v = true) :
   cases v
   case nil    => exact ⟨_, _, rfl, by decide, by decide⟩
   case bool b => cases b <;> exact ⟨_, _, rfl, by decide, by decide⟩
+  case kw s   => refine ⟨_, _, rfl, ?_, ?_⟩ <;>
+                   (intro h; have := congrArg String.toList h; simp at this)
   case list _ => exact ⟨_, _, rfl, by decide, by decide⟩
   case vec _  => exact ⟨_, _, rfl, by decide, by decide⟩
   all_goals simp [isLit] at hl
+
+-- A keyword token `":" ++ s` is none of the structural/quote tokens, so
+-- `readForm` falls through to `readAtom`, which yields the keyword. Each
+-- non-matching arm is refuted from the token's leading `:`.
+private theorem readForm_kw (f : Nat) (s : String) (rest : List String) :
+    readForm (f+1) ((":" ++ s) :: rest) = .ok (.kw s, rest) := by
+  unfold readForm
+  split <;> rename_i heq <;>
+    first
+    | (injection heq with hh ht; subst hh; subst ht; rw [readAtom_kw]; rfl)
+    | (injection heq with hh _; exact absurd (congrArg String.toList hh) (by simp))
+    | simp at heq
 
 mutual
 -- The parser inverts the token printer (with leftover `rest` untouched),
@@ -243,6 +258,9 @@ private theorem readForm_round : ∀ (v : MalVal) (rest : List String) (fuel : N
   | .bool false, rest, fuel, _, hf => by
     obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by simp only [cost] at hf; omega⟩
     simp [printTokens, readForm, readAtom]; rfl
+  | .kw s,       rest, fuel, _, hf => by
+    obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by simp only [cost] at hf; omega⟩
+    simpa [printTokens] using readForm_kw f s rest
   | .list xs,    rest, fuel, hl, hf => by
     simp only [cost] at hf
     obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 1 := ⟨fuel - 1, by omega⟩
@@ -257,9 +275,9 @@ private theorem readForm_round : ∀ (v : MalVal) (rest : List String) (fuel : N
     simp only [printTokens, List.cons_append, List.append_assoc, List.nil_append, readForm]
     have h := readSeq_round xs #[] rest f "]" .vec hll (by omega) (Or.inr rfl)
     simpa using h
-  | .int _, _, _, hl, _ | .str _, _, _, hl, _ | .kw _, _, _, hl, _
-  | .sym _, _, _, hl, _ | .map _, _, _, hl, _ | .fn _, _, _, hl, _
-  | .atom _, _, _, hl, _ | .withMeta _ _, _, _, hl, _ => by
+  | .int _, _, _, hl, _ | .str _, _, _, hl, _ | .sym _, _, _, hl, _
+  | .map _, _, _, hl, _ | .fn _, _, _, hl, _ | .atom _, _, _, hl, _
+  | .withMeta _ _, _, _, hl, _ => by
     simp [isLit] at hl
 
 private theorem readSeq_round : ∀ (xs : List MalVal) (acc : Array MalVal)
@@ -295,5 +313,11 @@ theorem readForm_printTokens (v : MalVal) (hl : isLit v = true) :
     readForm (cost v) (printTokens v) = .ok (v, []) := by
   have h := readForm_round v [] (cost v) hl (Nat.le_refl _)
   simpa using h
+
+-- Keywords round-trip even nested among the other literals.
+example :
+    let v : MalVal := .list [.kw "a", .nil, .vec [.bool true, .kw "b"]]
+    readForm (cost v) (printTokens v) = .ok (v, []) := by
+  intro v; exact readForm_printTokens _ (by decide)
 
 end Reader
